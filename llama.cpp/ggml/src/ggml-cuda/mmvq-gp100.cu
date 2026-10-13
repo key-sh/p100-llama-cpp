@@ -1218,7 +1218,7 @@ static void gp100_dispatch_r(const ggml_type type, const void * W, const void * 
             }
             GGML_ABORT("IQ4_NL supports at most 4 rows per warp");
         case GGML_TYPE_Q6_K:
-            if constexpr (R <= 8) {
+            if constexpr (R <= (GLU ? 2 : 8)) {
                 GP100_LAUNCH((gp100_mmvq_q6_K<R, GLU>));
                 break;
             }
