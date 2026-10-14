@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+# apply_nc.py -- R8 patch: GP100 Q8_0 multi-column (2..4 columns) fp16 verify kernel.
+# Target : D:\p100-llama-cpp\llama.cpp\ggml\src\ggml-cuda\mmvq-gp100.cu
+# Edits  : E1 host predicate (admit Q8_0 with 2<=ncols<=4)
+#          E2 insert kernel gp100_mmvq_b32_nc before ggml_cuda_gp100_mmvq_supported
+#          E3 gp100_launch_nc: add Q8_0 branch
+#          E4 gp100_dispatch_nc: add Q8_0 case
+# Safety : every anchor must occur exactly once; all-or-nothing write; one-time .pre-nc.bak backup;
+#          idempotent (ALREADY_APPLIED); LF/CRLF tolerant on BOTH sides (Notepad save is fine).
+# Usage  : python apply_nc.py --check [path]   <- verify anchors only, write nothing
+#          python apply_nc.py [path]           <- apply
+import os, shutil, sys
+
+_args = [a for a in sys.argv[1:] if not a.startswith("-")]
+CHECK = ("--check" in sys.argv[1:]) or ("-c" in sys.argv[1:])
+path = _args[0] if _args else r"D:\p100-llama-cpp\llama.cpp\ggml\src\ggml-cuda\mmvq-gp100.cu"
+
+KERNEL = r"""// Q8_0 with 2..4 columns: the shared-memory staging and funnel-shift unpack of gp100_mmvq_b32 (34-byte blocks
+// are only 2-byte aligned, so unlike IQ4_XS the weights cannot be __ldg'd straight out of L2) combined with the
+// per-column FMA pattern of gp100_mmvq_iq4_xs_nc: every block is unpacked once and FMA'd against every column,
+// so only the activation loads and one HFMA2 chain per column scale with NC. The fp16 accumulation order of a
+// column is identical to the single-column kernel, so a verify-batch column reproduces the batch-1 result for
+// the same token bit for bit.
+template <int R, int NC>
+static __global__ void __launch_bounds__(128) gp100_mmvq_b32_nc(
+        const void * __restrict__ vW, const half * __restrict__ y, const float2 * __restrict__ ys,
+        float * __restrict__ dst, const int nrows, const int nsb, const int stride_row, const int stride_dst) {
+#if __CUDA_ARCH__ == GGML_CUDA_CC_PASCAL
+    typedef block_q8_0 block;
+    constexpr int BS     = sizeof(block);            // 34
+    constexpr int SEG_U4 = 32 * BS / sizeof(uint4);  // 68
+    static_assert(32 * BS % sizeof(uint4) == 0, "32 blocks must be a whole number of uint4");
+    __shared__ uint4 stage[4][R][SEG_U4 + 1]; // +1: the funnel-shifted reads of lane 31 touch one word past its block
+
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
+    const int row0 = (blockIdx.x * 4 + warp) * R;
+    const int nb   = nsb * (QK_K / QK8_0); // 34-byte blocks per row
+    const int K    = nsb * QK_K;
+
+    const uint4 * rowp[R];
+#pragma unroll
+    for (int r = 0; r < R; r++) {
+        rowp[r] = (const uint4 *) ((const block *) vW + (int64_t) min(row0 + r, nrows - 1) * stride_row);
+    }
+
+    float sum[R][NC];
+#pragma unroll
+    for (int r = 0; r < R; r++) {
+#pragma unroll
+        for (int c = 0; c < NC; c++) {
+            sum[r][c] = 0.0f;
+        }
+    }
+
+    for (int c0 = 0; c0 * 32 < nb; c0++) {
+        const int b0   = c0 * 32;
+        const int nblk = min(nb - b0, 32);
+        const int nu4  = (nblk * BS + 15) / 16;
+        uint4 v0[R], v1[R], v2[R];
+#pragma unroll
+        for (int r = 0; r < R; r++) {
+            const uint4 * src = rowp[r] + b0 * BS / 16;
+            v0[r] = lane      < nu4 ? __ldg(src + lane)      : make_uint4(0, 0, 0, 0);
+            v1[r] = lane + 32 < nu4 ? __ldg(src + lane + 32) : make_uint4(0, 0, 0, 0);
+            v2[r] = lane + 64 < nu4 ? __ldg(src + lane + 64) : make_uint4(0, 0, 0, 0);
+        }
+        __syncwarp();
+#pragma unroll
+        for (int r = 0; r < R; r++) {
+            stage[warp][r][lane] = v0[r];
+            if (lane + 32 < SEG_U4) {
+                stage[warp][r][lane + 32] = v1[r];
+            }
+            if (lane + 64 < SEG_U4) {
+                stage[warp][r][lane + 64] = v2[r];
+            }
+        }
+        __syncwarp();
+
+        const int  b   = b0 + lane;
+        const bool act = lane < nblk;
+        const uint4 zero4 = make_uint4(0, 0, 0, 0);
+
+#pragma unroll
+        for (int r = 0; r < R; r++) {
+            const uint8_t  * bb  = (const uint8_t *) &stage[warp][r][0] + BS * lane; // this lane's block
+            const uint32_t * w   = (const uint32_t *) ((uintptr_t) bb & ~(uintptr_t) 3);
+            const uint32_t   shf = ((uintptr_t) bb & 3) * 8;          // 0 or 16
+            const half       d   = __ushort_as_half((unsigned short) (__funnelshift_r(w[0], w[1], shf) & 0xFFFF));
+            const int      qo  = (shf + 16) / 32;
+            const uint32_t qsh = (shf + 16) % 32;
+            uint32_t wv[16]; // this block's 32 weights (q + 128) as subnormal halves, in y order
+#pragma unroll
+            for (int k = 0; k < 8; k++) {
+                const uint32_t q = __funnelshift_r(w[qo + k], w[qo + k + 1], qsh) ^ 0x80808080u; // q + 128, per byte
+                wv[2*k]     = __byte_perm(q, 0, 0x4140); // w(4k),   w(4k+1)
+                wv[2*k + 1] = __byte_perm(q, 0, 0x4342); // w(4k+2), w(4k+3)
+            }
+#pragma unroll
+            for (int c = 0; c < NC; c++) {
+                const float2 sc = act ? __ldg(ys + (int64_t) c * (K / 32) + b) : make_float2(0.0f, 0.0f); // {rescale, sum}
+                const uint4 * yp = (const uint4 *) (y + (int64_t) c * K + 32 * b);
+                const uint4 yv[4] = {act ? __ldg(yp)     : zero4, act ? __ldg(yp + 1) : zero4,
+                                     act ? __ldg(yp + 2) : zero4, act ? __ldg(yp + 3) : zero4};
+                const half2 * Y = (const half2 *) yv;
+                half2 acc = __float2half2_rn(0.0f);
+#pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    acc = __hfma2(*(const half2 *) &wv[j], Y[j], acc);
+                }
+                const float s = __half2float(__hadd(__low2half(acc), __high2half(acc)));
+                if (act) {
+                    sum[r][c] = fmaf(__half2float(d), fmaf(s, sc.x, -128.0f * sc.y), sum[r][c]);
+                }
+            }
+        }
+    }
+
+#pragma unroll
+    for (int r = 0; r < R; r++) {
+#pragma unroll
+        for (int c = 0; c < NC; c++) {
+            float v = sum[r][c];
+#pragma unroll
+            for (int o = 16; o > 0; o >>= 1) {
+                v += __shfl_xor_sync(0xFFFFFFFF, v, o);
+            }
+            if (lane == 0 && row0 + r < nrows) {
+                dst[(int64_t) c * stride_dst + row0 + r] = v;
+            }
+        }
+    }
+#else
+    GGML_UNUSED_VARS(vW, y, ys, dst, nrows, nsb, stride_row, stride_dst);
+    NO_DEVICE_CODE;
+#endif // __CUDA_ARCH__ == GGML_CUDA_CC_PASCAL
+}"""
+
+E1_OLD = r"""(ncols > 1 && (fusion || (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K &&
+                                  src0->type != GGML_TYPE_IQ4_XS)))) {"""
+E1_NEW = r"""(ncols > 1 && (fusion || (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K &&
+                                  src0->type != GGML_TYPE_IQ4_XS &&
+                                  (src0->type != GGML_TYPE_Q8_0 || ncols > 4))))) {"""
+E2_ANCHOR = r"""bool ggml_cuda_gp100_mmvq_supported(const int cc, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids,"""
+E3_OLD = r"""} else if constexpr (type == GGML_TYPE_IQ4_XS) {
+        gp100_mmvq_iq4_xs_nc<R, NC><<<nblocks, 128, 0, stream>>>(W, y, ys, dst, nrows, nsb, stride_row, stride_dst);
+    } else {"""
+E3_NEW = r"""} else if constexpr (type == GGML_TYPE_IQ4_XS) {
+        gp100_mmvq_iq4_xs_nc<R, NC><<<nblocks, 128, 0, stream>>>(W, y, ys, dst, nrows, nsb, stride_row, stride_dst);
+    } else if constexpr (type == GGML_TYPE_Q8_0) {
+        // Q8_0: 2 columns -> 4 rows/warp; 3..4 columns -> 2 rows/warp (register budget policy of batch 1)
+        if constexpr (NC <= 2) {
+            gp100_mmvq_b32_nc<4, NC><<<nblocks, 128, 0, stream>>>(W, y, ys, dst, nrows, nsb, stride_row, stride_dst);
+        } else {
+            gp100_mmvq_b32_nc<2, NC><<<(nrows + 7) / 8, 128, 0, stream>>>(W, y, ys, dst, nrows, nsb, stride_row, stride_dst);
+        }
+    } else {"""
+E4_OLD = r"""case GGML_TYPE_Q6_K: gp100_dispatch_nc_t<GGML_TYPE_Q6_K>(W, y, ys, s16, dst, nrows, nsb, stride_row, ncols, stride_dst, stream); break;
+        default: GGML_ABORT("no GP100 multi-column kernel for this type");"""
+E4_NEW = r"""case GGML_TYPE_Q6_K: gp100_dispatch_nc_t<GGML_TYPE_Q6_K>(W, y, ys, s16, dst, nrows, nsb, stride_row, ncols, stride_dst, stream); break;
+        case GGML_TYPE_Q8_0: gp100_dispatch_nc_t<GGML_TYPE_Q8_0>(W, y, ys, s16, dst, nrows, nsb, stride_row, ncols, stride_dst, stream); break;
+        default: GGML_ABORT("no GP100 multi-column kernel for this type");"""
+
+EDITS = [
+    ("E1-predicate",     E1_OLD, E1_NEW),
+    ("E2-kernel-insert", E2_ANCHOR, KERNEL + "\n\n" + E2_ANCHOR),
+    ("E3-launch_nc",     E3_OLD, E3_NEW),
+    ("E4-dispatch_case", E4_OLD, E4_NEW),
+]
+
+def main():
+    raw = open(path, "rb").read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        print("DECODE_FAIL", e); return 1
+    if "gp100_mmvq_b32_nc" in text:
+        print("ALREADY_APPLIED"); return 0
+    eol = "\r\n" if b"\r\n" in raw else "\n"
+    def cvt(s):  # strip edge newlines, then normalize literals to the TARGET file's EOL
+        return s.replace("\r\n", "\n").strip("\n").replace("\n", eol)
+    pairs = [(name, cvt(old), cvt(new)) for name, old, new in EDITS]
+    if CHECK:
+        allok = True
+        for name, o, _n in pairs:
+            c = text.count(o)
+            allok = allok and (c == 1)
+            print("CHECK %-18s count=%d %s" % (name, c, "OK" if c == 1 else "MISMATCH"))
+        print("CHECK_OK" if allok else "CHECK_FAIL")
+        return 0 if allok else 1
+    bal0 = text.count("(") - text.count(")")
+    bak = path + ".pre-nc.bak"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+        print("BACKUP " + bak)
+    out, ok = text, True
+    for name, o, n in pairs:
+        c = out.count(o)
+        if c != 1:
+            print("ANCHOR_FAIL %s count=%d" % (name, c)); ok = False
+        else:
+            out = out.replace(o, n)
+            print("EDIT_OK " + name)
+    if not ok:
+        print("NO_CHANGES_WRITTEN"); return 1
+    if out.count("(") - out.count(")") != bal0:
+        print("PAREN_DRIFT"); return 1
+    open(path, "wb").write(out.encode("utf-8"))
+    print("APPLIED_OK eol=%s kernel_refs=%d" % ("CRLF" if eol == "\r\n" else "LF", out.count("gp100_mmvq_b32_nc")))
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
