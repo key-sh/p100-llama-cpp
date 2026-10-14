@@ -45,7 +45,7 @@ for _ in range(n_tensors):
     ttype=u32(); off=u64()
     ne=1
     for d in dims: ne*=d
-    tn,bs,ts=TT[ttype]
+    tn,bs,ts=TT.get(ttype,(f'UNK_{ttype}',1,1))
     nbytes=ne//bs*ts
     tensors.append((name,dims,tn,nbytes))
 
