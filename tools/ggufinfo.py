@@ -1,7 +1,8 @@
 import struct, sys, collections
 
 TT={}
-for line in open(sys.argv[2] if len(sys.argv)>2 else '/dev/null'):
+import os
+for line in open(sys.argv[2] if len(sys.argv)>2 else os.devnull):
     p=line.split()
     if len(p)==4: TT[int(p[0])]=(p[1],int(p[2]),int(p[3]))
 
