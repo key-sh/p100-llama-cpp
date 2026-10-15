@@ -397,6 +397,13 @@ struct ggml_cuda_ar_pipeline {
     // memory; CPU never reads/writes -- only the kernel and cudaMemset.
     // Use ggml_cuda_ar_arrival_ptr() to index.
     ggml_cuda_ar_host_mapping arrival;
+
+    // P12-2: P2P staging (chunked-kernel path).  Valid only when use_p2p;
+    // then dev_stage[r] replaces host_buf[r] and arrival_dev[r] replaces the
+    // shared mapped-host arrival ring for rank r.
+    bool      use_p2p = false;
+    uint8_t * dev_stage[GGML_CUDA_MAX_DEVICES]   = {};
+    uint8_t * arrival_dev[GGML_CUDA_MAX_DEVICES] = {};
 };
 
 // Base pointer for the (slot, rank) per-block token block.  The kernel adds
@@ -606,6 +613,46 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         }
     }
 
+    // P12-2: try to bring up a full P2P mesh for the chunked-kernel path.
+    // Staging buffers and arrival flags move to device memory (single PCIe
+    // crossing per byte, no host-RAM fabric contention).  Requires every
+    // ordered device pair to support peer access; on any failure (or
+    // GGML_CUDA_AR_P2P=0) fall back to the mapped-host staging path.
+    p->use_p2p = ggml_cuda_ar_env_u64("GGML_CUDA_AR_P2P", 1) != 0;
+    if (p->use_p2p) {
+        const size_t arrival_rank_bytes = (size_t) GGML_CUDA_AR_POOL_SIZE *
+            GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
+        for (size_t i = 0; i < n_devices && p->use_p2p; ++i) {
+            ggml_cuda_set_device(p->devices[i]);
+            for (size_t j = 0; j < n_devices; ++j) {
+                if (i == j) {
+                    continue;
+                }
+                int can = 0;
+                if (cudaDeviceCanAccessPeer(&can, p->devices[i], p->devices[j]) != cudaSuccess || !can) {
+                    (void) cudaGetLastError();
+                    p->use_p2p = false;
+                    break;
+                }
+                const cudaError_t rc = cudaDeviceEnablePeerAccess(p->devices[j], 0);
+                if (rc != cudaSuccess && rc != cudaErrorPeerAccessAlreadyEnabled) {
+                    (void) cudaGetLastError();
+                    p->use_p2p = false;
+                    break;
+                }
+            }
+            if (p->use_p2p) {
+                if (cudaMalloc(reinterpret_cast<void **>(&p->dev_stage[i]), host_buf_total) != cudaSuccess ||
+                    cudaMalloc(reinterpret_cast<void **>(&p->arrival_dev[i]), arrival_rank_bytes) != cudaSuccess ||
+                    cudaMemset(p->arrival_dev[i], 0, arrival_rank_bytes) != cudaSuccess) {
+                    (void) cudaGetLastError();
+                    p->use_p2p = false;
+                }
+            }
+        }
+        GGML_LOG_INFO("%s: P2P mesh %s\n", __func__, p->use_p2p ? "enabled (device staging)" : "unavailable, using mapped-host staging");
+    }
+
     GGML_LOG_INFO("%s: initialized AllReduce pipeline: %zu GPUs, "
                   "%zu KB chunked kernel staging + %zu MB copy-engine staging per GPU\n",
                   __func__, n_devices, p->buf_bytes >> 10, p->copy_bytes >> 20);
@@ -636,6 +683,14 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         if (p->dev_tmp[i]) {
             ggml_cuda_set_device(p->devices[i]);
             cudaFree(p->dev_tmp[i]);
+        }
+        if (p->dev_stage[i]) {
+            ggml_cuda_set_device(p->devices[i]);
+            cudaFree(p->dev_stage[i]);
+        }
+        if (p->arrival_dev[i]) {
+            ggml_cuda_set_device(p->devices[i]);
+            cudaFree(p->arrival_dev[i]);
         }
         ggml_cuda_set_device(p->devices[i]);
         for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
@@ -1008,8 +1063,14 @@ bool ggml_cuda_ar_allreduce(
 
             ggml_cuda_ar_kernel_peers peers = {};
             for (int r = 0; r < n; ++r) {
-                peers.host[r]    = p->host_buf[r].dev + (size_t) slot * p->buf_bytes;
-                peers.arrival[r] = ggml_cuda_ar_arrival_ptr(p, slot, r);
+                if (p->use_p2p) {
+                    peers.host[r]    = p->dev_stage[r] + (size_t) slot * p->buf_bytes;
+                    peers.arrival[r] = reinterpret_cast<int *>(p->arrival_dev[r]) +
+                        slot * GGML_CUDA_AR_KERNEL_BLOCKS * (int) (GGML_CUDA_AR_ARRIVAL_STRIDE / sizeof(int));
+                } else {
+                    peers.host[r]    = p->host_buf[r].dev + (size_t) slot * p->buf_bytes;
+                    peers.arrival[r] = ggml_cuda_ar_arrival_ptr(p, slot, r);
+                }
             }
 
             for (int i = 0; i < n; ++i) {
