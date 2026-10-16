@@ -618,7 +618,14 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     // crossing per byte, no host-RAM fabric contention).  Requires every
     // ordered device pair to support peer access; on any failure (or
     // GGML_CUDA_AR_P2P=0) fall back to the mapped-host staging path.
-    p->use_p2p = ggml_cuda_ar_env_u64("GGML_CUDA_AR_P2P", 1) != 0;
+    // P2P device staging is disabled by default (P20 safe-default fix).
+    // It only activates on all-peer-access topologies (e.g. 3 GPUs behind
+    // one PCIe root), where it breaks the MTP draft config (case 32b9763);
+    // dual-socket 4-GPU layouts never activate it (any failed pair falls
+    // back wholesale to mapped-host staging). Suspected Pascal ordering
+    // gap: volatile + threadfence_system does not carry over to peer-device
+    // writes on sm_60 (attributed, not proven). GGML_CUDA_AR_P2P=1 opts in.
+    p->use_p2p = ggml_cuda_ar_env_u64("GGML_CUDA_AR_P2P", 0) != 0;
     if (p->use_p2p) {
         const size_t arrival_rank_bytes = (size_t) GGML_CUDA_AR_POOL_SIZE *
             GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
