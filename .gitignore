@@ -6,3 +6,5 @@
 
 # build of the bundled llama.cpp
 /llama.cpp/build/
+data/truth25593.bin
+data/*.zip
