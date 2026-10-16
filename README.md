@@ -9,7 +9,8 @@ This repo ships a ready-to-build llama.cpp with the P100 patch series already ap
 ```
 git clone https://github.com/key-sh/p100-llama-cpp && cd p100-llama-cpp
 git checkout p100-gp100-fp32
-./build.sh                       # needs CUDA 12.x + cmake; binaries land in llama.cpp/build/bin/
+
+./build.sh   # needs CUDA 12.x + cmake; binaries land in llama.cpp/build/bin/
 
 # one P100
 llama.cpp/build/bin/llama-server -m model.gguf -ngl 99
@@ -20,7 +21,7 @@ llama.cpp/build/bin/llama-server -m model.gguf -ngl 99 -sm tensor
 
 `llama.cpp/` is upstream **`b10660`** plus `patches/0001`-`0012`, nothing else; `tools/verify-source.sh` re-derives it from upstream and diffs to prove that. It is the exact source running on the machine these numbers came from.
 
-**This branch (`p100-gp100-fp32`, key-sh) differs from that description**: its tree is `cde4ecf` (upstream `b10660` + patches `0001`-`0009`) with patch `0010` re-applied as source, plus the hardening changes documented in ["This branch (key-sh): FA-GEMM defaults to fp32"](#this-branch-key-sh-fa-gemm-defaults-to-fp32-the-fp16-nan-fix) below — a `mmvq-gp100` guard for GLU models, removal of `CUBLAS_GEMM_ALGO4` from the FA-GEMM PV call, and the fp32 default. The `patches/0010`-`0012` files are carried for reference only: the code of `0011`/`0012` is **not** applied on this branch (a GP100-only box never reaches the code they touch, and the validation below ran on exactly this tree). The validated binary is `ggml-cuda.dll`, SHA256 `d1ace29be270f8e8c810620a73f63615c6c9a651289629ab13dd3cddc1327b9d`.
+**This branch (`p100-gp100-fp32`, key-sh) differs from that description**: its tree is `cde4ecf` (upstream `b10660` + patches `0001`-`0009`) with patch `0010` re-applied as source, plus the hardening changes documented in ["This branch (key-sh): FA-GEMM defaults to fp32"](#this-branch-key-sh-fa-gemm-defaults-to-fp32-the-fp16-nan-fix) below — a `mmvq-gp100` guard for GLU models, removal of `CUBLAS_GEMM_ALGO4` from the FA-GEMM PV call, and the fp32 default — and the changes documented in ["This branch (key-sh): `GGML_CUDA_GRAPH_FORCE`"](#this-branch-key-sh-ggml_cuda_graph_force-the-pre-volta-graph-unlock) below: the pre-Volta CUDA-graph unlock, plus an AllReduce P2P-staging variant that sleeps on this box. The `patches/0010`-`0012` files are carried for reference only: the code of `0011`/`0012` is **not** applied on this branch (a GP100-only box never reaches the code they touch, and the validation below ran on exactly this tree). The validated binary is `ggml-cuda.dll`, SHA256 `d1ace29be270f8e8c810620a73f63615c6c9a651289629ab13dd3cddc1327b9d` — that is the tree *before* the two branch additions above; they were validated by the byte-identical-output gates documented in their section rather than by a new binary hash.
 
 What you get depends on your setup:
 
@@ -35,26 +36,25 @@ What you get depends on your setup:
 | any P100 | `0005`, and the default f16 KV cache (do **not** pass `-ctk q8_0`) | ~+5% prompt processing; f16 KV grows to +24% tg at long context |
 | two P100s with `-sm tensor` | all of the above + `0003` + `0004` | a further ~+15% prompt processing, +10% tg |
 | three or more P100s with `-sm tensor` | all of the above + `0006` | measured on four physical cards by key-sh: the internal AllReduce runs **2.3x prefill / +39% tg** over the host-RAM fallback, outputs byte-identical — see "Three or more cards" below |
+| any P100 running **this branch**, any model, one or more cards | key-sh: `GGML_CUDA_GRAPH_FORCE=1` | the tree's CUDA-graph pipeline unlocked below Volta: qwen3.8-27B-UD tg128 32.5 -> 37.4 (+15%), n2048 +17%; MoE qwen3.6-35B-A3B tg 33.6 -> 83.8 (**2.5x**); on real server requests 27B 22.9 -> 32.5 (+42%), MoE 23.2 -> 61.5 (**2.6x**); outputs byte-identical at temp 0 — see ["This branch (key-sh): `GGML_CUDA_GRAPH_FORCE`"](#this-branch-key-sh-ggml_cuda_graph_force-the-pre-volta-graph-unlock) |
 | P40 / GTX 10xx (sm_61) | `0001`, `0005` | small; `0002` is GP100-only by design. `./build.sh` detects the card; pass `CUDA_ARCH="60;61"` for a binary that serves both. (`0012` is reference-only on this branch) |
 
 **Three or more cards.** Upstream llama.cpp's internal AllReduce (`ggml/src/ggml-cuda/allreduce.cu`) only handles exactly two devices; with more it logs `internal AllReduce init failed (n_devices != 2?)` and falls back to the generic f32-through-host-RAM exchange that `0003` exists to avoid. `0006` extends it to N devices. It is **correctness-tested only**: on 2x P100 split into 3 and 4 virtual devices with `GGML_CUDA_DEVICES`, perplexity matches the stock fallback (identical at 4, within 0.02% at 3) and is identical across the chunked, copy-engine and mixed paths; two-card output is bit-identical to `0005` and tg is unchanged. Virtual devices share a GPU and a PCIe link, so the original measurements had **no speed data for a real 3+ card box** — if you have a setup not covered below, compare `-sm tensor` with and without `GGML_CUDA_ALLREDUCE=none` and please report back. `-sm layer` never uses the AllReduce and works on any number of cards.
 
-**Four-GPU update (key-sh, 2026-10).** The invitation above has since been taken up on this box: **4x Tesla P100-PCIE-16GB (physical)**, `-sm tensor`, `--tensor-split 25,25,25,25`, this branch's tree, qwen3.8-27B-UD-Q8_K_XL, 8k ctx, `-fa on`, f16 KV, ubatch 1024. Prompt processing on the real 7,695-token request: **315.2 tok/s** with the internal AllReduce vs **137.3 / 137.7 tok/s** (two fresh runs) with `GGML_CUDA_ALLREDUCE=none` (the generic f32-through-host-RAM fallback) — **2.3x**. Token generation (128 tokens, temp 0): **27.22 vs 19.63 tok/s** — **+39%**. Output check: the 128-token temp-0 outputs of the two paths are **byte-identical (matching MD5)**. A bonus: the 7,695-token trigger prompt stayed NaN-clean on the four-device layout under both paths, so the fp32 fix holds there too. Method note: numbers come from `llama-server` on the real request, single shot per config (the fallback pp was repeated twice as a repeatability check), not llama-bench r=3 statistics — the magnitudes are solid, the precision is not. Takeaway: on a real four-card box the internal AllReduce is not merely correct but decisively faster than the host-RAM fallback on both prefill (2.3x) and decode (+39%) — the `-sm tensor` story extends beyond two cards.
+**Four-GPU update (key-sh, 2026-10).** The invitation above has since been taken up on this box: **4x Tesla P100-PCIE-16GB (physical)**, `-sm tensor`, `--tensor-split 25,25,25,25`, this branch's tree, qwen3.8-27B-UD-Q8_K_XL, 8k ctx, `-fa on`, f16 KV, ubatch 1024. Prompt processing on the real 7,695-token request: **315.2 tok/s** with the internal AllReduce vs **137.3 / 137.7 tok/s** (two fresh runs) with `GGML_CUDA_ALLREDUCE=none` (the generic f32-through-host-RAM fallback) — **2.3x**. Token generation (128 tokens, temp 0): **27.22 vs 19.63 tok/s** — **+39%**. Output check: the 128-token temp-0 outputs of the two paths are **byte-identical (matching MD5)**. A bonus: the 7,695-token trigger prompt stayed NaN-clean on the four-device layout under both paths, so the fp32 fix holds there too. Method note: numbers come from `llama-server` on the real request, single shot per config (the fallback pp was repeated twice as a repeatability check), not llama-bench r=3 statistics — the magnitudes are solid, the precision is not. Takeaway: on a real four-card box the internal AllReduce is not merely correct but decisively faster than the host-RAM fallback on both prefill (2.3x) and decode (+39%) — the `-sm tensor` story extends beyond two cards. A later addition to this branch stacks a CUDA-graph win on top of all of it (see [`GGML_CUDA_GRAPH_FORCE`](#this-branch-key-sh-ggml_cuda_graph_force-the-pre-volta-graph-unlock) below): +15-17% decode on this dense model and **2.5x** on a MoE model, outputs byte-identical at temp 0.
 
-**Do not set `GGML_CUDA_P2P`** — on a dual-socket P100 box it is a 10.7x regression (see below). Numbers everywhere in this README were measured on one machine (2x P100-PCIE-16GB on different CPU sockets, 250 W cap); yours will differ, the mechanisms should not.
-
-llama.cpp is MIT-licensed, © the ggml authors — see `llama.cpp/LICENSE`. This fork is not affiliated with or endorsed by the llama.cpp project.
+**Do not set `GGML_CUDA_P2P`** — on a dual-socket P100 box it is a 10.7x regression (see below). Numbers everywhere in this README were measured on one machine (2x P100-PCIE-16GB on different CPU sockets, 250 W cap); yours will differ, the mechanisms should not. llama.cpp is MIT-licensed, © the ggml authors — see `llama.cpp/LICENSE`. This fork is not affiliated with or endorsed by the llama.cpp project.
 
 ---
 
 Two small patches to llama.cpp's CUDA backend that make token generation **33% faster on one P100 and 23% faster across two**, plus the measurements that led to them.
 
-| model | config | before | after | |
-|---|---|---|---|---|
-| Llama-3.1-8B Q4_K_M | 1 card | 39.28 tok/s | **52.22** | **+32.9%** |
-| Llama-3.1-8B Q4_K_M | 2 cards, `-sm tensor` | 56.80 tok/s | **70.00** | **+23.2%** |
-| Qwen3.8-27B Q4_K_XL | 2 cards, `-sm tensor` | 19.40 tok/s | **22.70** | **+17.0%** |
-| any | prompt processing | — | — | unchanged |
+| model | config | before | after | | |
+|---|---|---|---|---|---|
+| Llama-3.1-8B Q4_K_M | 1 card | 39.28 tok/s | **52.22** | **+32.9%** | |
+| Llama-3.1-8B Q4_K_M | 2 cards, `-sm tensor` | 56.80 tok/s | **70.00** | **+23.2%** | |
+| Qwen3.8-27B Q4_K_XL | 2 cards, `-sm tensor` | 19.40 tok/s | **22.70** | **+17.0%** | |
+| any | prompt processing | — | — | unchanged | |
 
 A third patch, added later, targets **multi-GPU** rather than the quantized kernels, and moves prompt processing as well:
 
@@ -108,13 +108,11 @@ Patch `0012` keeps the special GQA-6 flash-attention tile ladder GP100-only. Pat
 
 A quantized K sends attention's K·Q dot through `ggml_cuda_dp4a`, which sm_60 emulates as four scalar int8 multiply-adds; an F16 K uses the packed fp16 unit, which GP100 has and the other Pascals do not. It reads 52% *more* memory and wins anyway. See [`docs/kv-cache-type.md`](docs/kv-cache-type.md) — including where it does **not** apply (speculative decoding) and the variant that would be better but crashes.
 
-Two plausible optimisations were also tried and **lost**: CUDA graphs (−1.4%) and MMVQ fusion (−2.1%), both of which reduce kernel launches. This used to be stated here as "launch-count reductions buy nothing and instruction-count reductions are everything", and that blanket form is **wrong** — a later fusion that removed 128 launches per token moved wall-clock time about 4x more than it moved kernel time, because the saving is the gap *between* kernels, which a profiler's kernel durations do not show. The accurate rule is narrower: a launch-count reduction pays only if it does not add work to a hot loop. Graphs add replay and update cost; MMVQ fusion adds predicates to an issue-bound loop. Both lost for that reason, not because launches are free. See [`docs/negative-results.md`](docs/negative-results.md).
+Optimisations that reduce kernel launches have a mixed record here, and the record is worth reading in full. CUDA graphs **lost 1.4%** on the two-card box and **win +15% to +149%** on the four-card box (see the `GGML_CUDA_GRAPH_FORCE` section below); MMVQ fusion **lost 2.1%**. A blanket "launch-count reductions buy nothing" is wrong, and so is its opposite — a later fusion that removed 128 launches per token moved wall-clock time about 4x more than it moved kernel time, because the saving is the gap *between* kernels, which a profiler's kernel durations do not show. The accurate rule: a launch-count reduction pays only if it does not add work to a hot loop — and it pays more, the larger the per-launch host tax it removes. The graph machinery in this tree amortizes its own overhead (two-call warmup, uid-keyed replay, `cudaGraphExecUpdate` only on property change), and the four-card box has far more per-step host work for it to remove; the two-card box had less, and MMVQ fusion adds predicates to an issue-bound loop on any box. See [`docs/negative-results.md`](docs/negative-results.md) for the historical investigation.
 
 ## Why the P100 is a special case
 
-GP100 is the only Pascal with **full-rate fp16 and no `__dp4a`**. `__dp4a` — the 4-way byte dot product that every quantized CUDA kernel in llama.cpp is built around — is sm_61 and up. The P100 is sm_60, so it emulates it with four scalar int8 multiply-adds, each an `XMAD`.
-
-Measured on this card with `bench/sweep.cu`:
+GP100 is the only Pascal with **full-rate fp16 and no `__dp4a`**. `__dp4a` — the 4-way byte dot product that every quantized CUDA kernel in llama.cpp is built around — is sm_61 and up. The P100 is sm_60, so it emulates it with four scalar int8 multiply-adds, each an `XMAD`. Measured on this card with `bench/sweep.cu`:
 
 | workload | throughput |
 |---|---|
@@ -139,13 +137,9 @@ The kernel is **instruction-issue bound**, costing **9.25 SASS instructions per 
 
 ## The changes
 
-**`patches/0001` — stop recomputing the q8_1 block sum.** `vec_dot_q4_K_q8_1_impl_vmmq` recomputed the sum of the activation bytes for every output row via `dp4a(0x01010101, u, ...)`. That sum does not depend on the weight row, and `block_q8_1` already stores it in `ds.y` — the sibling `..._impl_mmq` reads it. Four threads cover one q8_1 block, so exactly one now contributes the min term. 148 → 138 instructions per 16 weights. **+4%.**
+**`patches/0001` — stop recomputing the q8_1 block sum.** `vec_dot_q4_K_q8_1_impl_vmmq` recomputed the sum of the activation bytes for every output row via `dp4a(0x01010101, u, ...)`. That sum does not depend on the weight row, and `block_q8_1` already stores it in `ds.y` — the sibling `..._impl_mmq` reads it. Four threads cover one q8_1 block, so exactly one now contributes the min term. 148 → 138 instructions per 16 weights. **+4%.** Architecture-neutral: it removes 4 `dp4a` per call everywhere, just worth most where `dp4a` is emulated. Not bit-identical — `ds.y` is the sum of the original floats rather than `d * sum(quants)` — but that is the approximation `..._impl_mmq` already ships, and it is arguably the more faithful of the two since it skips a quantisation round-trip.
 
-Architecture-neutral: it removes 4 `dp4a` per call everywhere, just worth most where `dp4a` is emulated. Not bit-identical — `ds.y` is the sum of the original floats rather than `d * sum(quants)` — but that is the approximation `..._impl_mmq` already ships, and it is arguably the more faithful of the two since it skips a quantisation round-trip.
-
-**`patches/0002` — a GP100 MMVQ parameter table.** `calc_rows_per_block` returned 1 for `ncols_dst == 1`, so every output row re-loaded and re-unpacked the same activations. A `MMVQ_PARAMETERS_PASCAL` table (guarded `__CUDA_ARCH__ == GGML_CUDA_CC_PASCAL`, i.e. GP100 only — sm_61 keeps the generic path) gives 4 rows per block for K-quants, sharing that work across rows. `calc_rows_per_block` gains a `ggml_type` parameter, mirroring `calc_nwarps`. **This is the large one.**
-
-Rows-per-block sweep, 1 card, tg128, with 0001 applied:
+**`patches/0002` — a GP100 MMVQ parameter table.** `calc_rows_per_block` returned 1 for `ncols_dst == 1`, so every output row re-loaded and re-unpacked the same activations. A `MMVQ_PARAMETERS_PASCAL` table (guarded `__CUDA_ARCH__ == GGML_CUDA_CC_PASCAL`, i.e. GP100 only — sm_61 keeps the generic path) gives 4 rows per block for K-quants, sharing that work across rows. `calc_rows_per_block` gains a `ggml_type` parameter, mirroring `calc_nwarps`. **This is the large one.** Rows-per-block sweep, 1 card, tg128, with 0001 applied:
 
 | rows | 1 | 2 | **4** | 8 |
 |---|---|---|---|---|
@@ -153,17 +147,11 @@ Rows-per-block sweep, 1 card, tg128, with 0001 applied:
 
 K-quants use 4; legacy quants stay at 2, because at 4 exactly one case (`MUL_MAT type_a=q4_1, n=1`) drifts to NMSE 6.93e-4 against `test-backend-ops`' 5e-4 bound. Everything passes at the shipped setting.
 
-**`patches/0003` — enable the internal AllReduce on Pascal.** `ggml_cuda_ar_pipeline_init` rejected every device below Volta, with the comment "the chunked kernel uses `__nanosleep`, which is sm70+". That is the only Volta-specific construct in `allreduce.cu`: the transport is mapped pinned host memory, the arrival flags are plain `volatile int` paired with `__threadfence_system()` — chosen, per the file's own comment, for "PCIe-attached GPUs without NVLink" — and `ggml_cuda_get_max_cpy_bytes()` already returns 8 instead of 16 on pre-Volta, so the vector width adapts on its own.
-
-Failing that gate meant `-sm tensor` fell through to `try_allreduce_butterfly`, a stub that returns `false`, and every layer boundary was serviced by the ggml scheduler's generic inter-backend copy: **f32, through host RAM, plus a separate add kernel.** On a 2048-token prefill of a *fully GPU-resident* 27B, an nvprof trace of the timed window shows **256 device-to-host and 258 host-to-device transfers of exactly 40.0 MB each — 20.5 GB of PCIe traffic, 23.1% of GPU time.** (40 MB = 2048 tokens x 5120 embed x 4 bytes. The counts are both cards summed: 128 per card = 64 layers x **2 exchanges per layer**, the tensor-parallel minimum — one after the attention/linear-attention output projection, one after the FFN.)
-
-The patch replaces `__nanosleep(100)` on pre-Volta with a `clock64()` delay loop of the same duration and lowers the gate to `GGML_CUDA_CC_PASCAL`. 20 added lines. **Tested on GP100; sm_61 shares the code path but was not available.**
+**`patches/0003` — enable the internal AllReduce on Pascal.** `ggml_cuda_ar_pipeline_init` rejected every device below Volta, with the comment "the chunked kernel uses `__nanosleep`, which is sm70+". That is the only Volta-specific construct in `allreduce.cu`: the transport is mapped pinned host memory, the arrival flags are plain `volatile int` paired with `__threadfence_system()` — chosen, per the file's own comment, for "PCIe-attached GPUs without NVLink" — and `ggml_cuda_get_max_cpy_bytes()` already returns 8 instead of 16 on pre-Volta, so the vector width adapts on its own. Failing that gate meant `-sm tensor` fell through to `try_allreduce_butterfly`, a stub that returns `false`, and every layer boundary was serviced by the ggml scheduler's generic inter-backend copy: **f32, through host RAM, plus a separate add kernel.** On a 2048-token prefill of a *fully GPU-resident* 27B, an nvprof trace of the timed window shows **256 device-to-host and 258 host-to-device transfers of exactly 40.0 MB each — 20.5 GB of PCIe traffic, 23.1% of GPU time.** (40 MB = 2048 tokens x 5120 embed x 4 bytes. The counts are both cards summed: 128 per card = 64 layers x **2 exchanges per layer**, the tensor-parallel minimum — one after the attention/linear-attention output projection, one after the FFN.) The patch replaces `__nanosleep(100)` on pre-Volta with a `clock64()` delay loop of the same duration and lowers the gate to `GGML_CUDA_CC_PASCAL`. 20 added lines. **Tested on GP100; sm_61 shares the code path but was not available.**
 
 Note the two wins have different mechanisms. Prefill tensors are above the 1 MB `copy_threshold` and take the copy-engine route, so their gain is the bf16 wire format halving the bytes. Generation tensors are below it and take the fused chunked kernel, so their gain is fusion — and it survives with the bf16 wire disabled, i.e. bit-exact.
 
-**`patches/0004` — run the copy-engine H2D on its own stream.** With `0003` in place, prefill-sized exchanges take the copy-engine path: each card copies its partial sum to pinned host memory (D2H), then pulls the peer's back (H2D). Both were issued on one stream, so **each card copied one direction at a time** although the P100 has two copy engines (`asyncEngineCount = 2`). A trace of a 2048-token prefill showed 642 ms per card of copies with zero overlap, 12.2% of wall time. A standalone test of 2 MB pinned copies — the chunk size the AllReduce uses — moves both directions in 55 ms on two streams against 100-111 ms serially, cross-socket included.
-
-The patch gives H2D its own stream and keeps every ordering the single stream gave implicitly with an explicit event. One of those orderings is easy to miss: the compute stream must wait for the card's *own* D2H to finish, not just the peer's data to arrive, because the add kernel writes the buffer the D2H is reading (and on the bf16 path that buffer is a pool allocation freed on return). **A build without that edge was exactly as fast and produced perplexity 7.68 instead of 3.53.** llama-bench cannot see that; perplexity can. Architecture-neutral — any multi-GPU `-sm tensor` setup on the copy-engine path should benefit — but only measured here.
+**`patches/0004` — run the copy-engine H2D on its own stream.** With `0003` in place, prefill-sized exchanges take the copy-engine path: each card copies its partial sum to pinned host memory (D2H), then pulls the peer's back (H2D). Both were issued on one stream, so **each card copied one direction at a time** although the P100 has two copy engines (`asyncEngineCount = 2`). A trace of a 2048-token prefill showed 642 ms per card of copies with zero overlap, 12.2% of wall time. A standalone test of 2 MB pinned copies — the chunk size the AllReduce uses — moves both directions in 55 ms on two streams against 100-111 ms serially, cross-socket included. The patch gives H2D its own stream and keeps every ordering the single stream gave implicitly with an explicit event. One of those orderings is easy to miss: the compute stream must wait for the card's *own* D2H to finish, not just the peer's data to arrive, because the add kernel writes the buffer the D2H is reading (and on the bf16 path that buffer is a pool allocation freed on return). **A build without that edge was exactly as fast and produced perplexity 7.68 instead of 3.53.** llama-bench cannot see that; perplexity can. Architecture-neutral — any multi-GPU `-sm tensor` setup on the copy-engine path should benefit — but only measured here.
 
 **A warning that came out of the same investigation:** llama.cpp only enables peer access when `GGML_CUDA_P2P` is set. On this dual-socket P100 box, setting it is a **10.7x regression** (pp2048 357.34 -> 33.45), even though `cudaDeviceCanAccessPeer` returns true both ways. Peer access across the UPI hop is pathological here.
 
@@ -174,11 +162,11 @@ The patch gives H2D its own stream and keeps every ordering the single stream ga
 - patch 0002 produces **byte-identical SASS on sm_61 and sm_75** — a strict no-op off GP100, verified by compiling both trees and diffing `cuobjdump -sass`
 - benchmarks run from a matched start temperature; these cards thermally throttle after ~60 s, which will silently corrupt an A/B otherwise
 
-For `0003`, which changes a transport rather than a kernel: perplexity over an identical corpus is **3.5372 ± 0.06192 before, 3.5330 ± 0.06180 after**, and **3.5372 ± 0.06192 — exactly the baseline — with `GGML_CUDA_AR_BF16_THRESHOLD=0`**. That last row is the proof the transport change is numerically exact; the delta in the middle row is upstream's default bf16 wire format alone, about 7% of one standard error. The generated SASS of the new spin loop was checked to confirm the `clock64` backoff was not elided and that warp reconvergence uses `@!P2 SYNC`.
+For `0003`, which changes a transport rather than a kernel: perplexity over an identical corpus is **3.5372 ± 0.06192 before, 3.5330 ± 0.06180 after**, and **3.5372 ± 0.06192 — exactly the baseline — with `GGML_CUDA_AR_BF16_THRESHOLD=0`**. That last row is the proof the transport change is numerically exact; the delta in the middle row is upstream's default bf16 wire format alone, about 7% of one standard error. The generated SASS of the new spin loop was checked to confirm the `clock64` backoff was not elided and that warp reconvergence uses `@!P2 SYNC`. `0003` was later **audited for the pre-Volta deadlock hazard** (no independent thread scheduling below sm_70): only lane 0 of each block spins, the flag it polls is written by the *peer GPU*, and both barriers are reached converged in SASS. Its small-tensor path was also checked for exactness by forcing every reduction through it — perplexity 3.5372 / 3.5330, identical to the copy-engine path. A 35-minute soak with three concurrent clients ran clean.
 
-`0003` was later **audited for the pre-Volta deadlock hazard** (no independent thread scheduling below sm_70): only lane 0 of each block spins, the flag it polls is written by the *peer GPU*, and both barriers are reached converged in SASS. Its small-tensor path was also checked for exactness by forcing every reduction through it — perplexity 3.5372 / 3.5330, identical to the copy-engine path. A 35-minute soak with three concurrent clients ran clean.
+For `0004`: perplexity identical to `0003` alone in both wire modes (3.5330 / 3.5372); 256-token temp-0 output byte-identical; a second 35-minute concurrent soak clean (68 requests, 0 hangs, output byte-identical to the pre-`0004` build).
 
-For `0004`: perplexity identical to `0003` alone in both wire modes (3.5330 / 3.5372); 256-token temp-0 output byte-identical; a second 35-minute concurrent soak clean (68 requests, 0 hangs, output byte-identical to the pre-`0004` build). The full series `0001..0006` applied with `git am` onto `b10660` reproduces the tested tree byte for byte (re-checked 2026-09-18; that tree is `llama.cpp/` in this repo).
+The full series `0001..0006` applied with `git am` onto `b10660` reproduces the tested tree byte for byte (re-checked 2026-09-18; that tree is `llama.cpp/` in this repo).
 
 ## Applying the patches yourself
 
@@ -190,8 +178,8 @@ git checkout b10660
 git am /path/to/patches/*.patch
 
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=60 \
-      -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13 \
-      -DCMAKE_CUDA_HOST_COMPILER=g++-13
+  -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13 \
+  -DCMAKE_CUDA_HOST_COMPILER=g++-13
 cmake --build build -j$(nproc)
 ```
 
@@ -211,9 +199,7 @@ CUDA 13 dropped Pascal, so build with **CUDA 12.x**. 12.4's `nvcc` rejects gcc-1
 
 ## Method note
 
-The step that mattered was an **attribution experiment**: compile variants of the kernel with each sub-expression removed and diff the SASS. Three 100-second builds overturned the working hypothesis — the redundant sum was assumed to cost ~16 XMAD and actually costs 6, because nvcc folds the multiply-by-one. Without it the effort would have gone into a 4% change instead of a 33% one.
-
-Single-TU iteration made that cheap: lift the exact `nvcc` line out of `build/compile_commands.json` and one translation unit rebuilds in ~100 s against ~20 minutes for the library.
+The step that mattered was an **attribution experiment**: compile variants of the kernel with each sub-expression removed and diff the SASS. Three 100-second builds overturned the working hypothesis — the redundant sum was assumed to cost ~16 XMAD and actually costs 6, because nvcc folds the multiply-by-one. Without it the effort would have gone into a 4% change instead of a 33% one. Single-TU iteration made that cheap: lift the exact `nvcc` line out of `build/compile_commands.json` and one translation unit rebuilds in ~100 s against ~20 minutes for the library.
 
 ## Scope and caveats
 
@@ -225,7 +211,11 @@ Single-TU iteration made that cheap: lift the exact `nvcc` line out of `build/co
 
 ## This branch (key-sh): FA-GEMM defaults to fp32, the fp16 NaN fix
 
-Patch `0010`'s GEMM flash attention has two precision modes; before this branch (Kmic-68's original and qr0n's tree) it defaults to the fp16 one — `COMPUTE_16F` cuBLAS calls, fp16 accumulate, fp16 S/P scratch. **On this machine, that fp16 path produces NaNs.** Setup: 2x P100-PCIE-16GB, qwen3.8-27B-UD-Q8_K_XL, `-sm tensor 16,16 -fa on`, f16 KV cache, ubatch 1024. Symptoms: during prefill of sufficiently long prompts the output degenerates to `?`-only text, non-deterministically (same prompt, same seed, different starts differ), and the damage persists — after one poisoned prefill even an 11-token request returns `?`s, because NaN stored in the f16 KV cache is reused by the iSWA layers until restart. Trigger statistics over the whole investigation: a 3,839-token prompt never poisoned (0 shots, on any build); a 3,866-token prompt poisoned in 3 of 6 shots; a 7,695-token prompt poisoned in 11 of 11 shots across three fp16-path builds.
+Patch `0010`'s GEMM flash attention has two precision modes; before this branch (Kmic-68's original and qr0n's tree) it defaults to the fp16 one — `COMPUTE_16F` cuBLAS calls, fp16 accumulate, fp16 S/P scratch. **On this machine, that fp16 path produces NaNs.**
+
+Setup: 2x P100-PCIE-16GB, qwen3.8-27B-UD-Q8_K_XL, `-sm tensor 16,16 -fa on`, f16 KV cache, ubatch 1024. Symptoms: during prefill of sufficiently long prompts the output degenerates to `?`-only text, non-deterministically (same prompt, same seed, different starts differ), and the damage persists — after one poisoned prefill even an 11-token request returns `?`s, because NaN stored in the f16 KV cache is reused by the iSWA layers until restart.
+
+Trigger statistics over the whole investigation: a 3,839-token prompt never poisoned (0 shots, on any build); a 3,866-token prompt poisoned in 3 of 6 shots; a 7,695-token prompt poisoned in 11 of 11 shots across three fp16-path builds.
 
 Ruled out by experiment (each a dedicated build + trigger shots): prescaling the QKᵀ input and de-scaling the output x16 (no effect — not an amplitude/overflow issue); removing `CUBLAS_GEMM_ALGO4` from the PV GEMM (no effect); PV precision itself (forcing the *less* accurate `CUBLAS_GEMM_DEFAULT` long chain left the poison rate unchanged). **Surviving suspect:** the closed-source cuBLAS fp16 `hgemm` kernels themselves, at the two shapes the path issues (m=2048, n=6144, k=256 and m=256, n=6144, k=2048) — amplitude-independent, shape-dependent, run-to-run non-deterministic. That is a hypothesis, not a proof; the kernels are closed, so source-level analysis stops here.
 
@@ -247,8 +237,55 @@ Cost: **≈1.5% prefill at 8k context** — matched-run means on the same 7,695-
 
 Validation: the fp32 path has never produced a NaN — **24/24 trigger requests clean across seven server starts and three builds** (two starts on the fp16-default build and two on the intermediate ALGO4-removed build, both with `GGML_CUDA_FA_GEMM_PREC=32` forced; three on the fp32-default build with **no environment variables at all**); decode (n=1) never poisoned in any fp16-path test; fp32 is also the more accurate path (Kmic-68: strictly more accurate than the upstream tile kernel).
 
+## This branch (key-sh): `GGML_CUDA_GRAPH_FORCE`, the pre-Volta graph unlock
+
+Upstream's CUDA-backend graph machinery — stream capture, a uid-keyed graph cache, a two-call warmup, `cudaGraphExecUpdate` for shape-stable replay — is complete in this tree but gated off below Volta by one check in `ggml_cuda_graph_set_enabled`: `cc < GGML_CUDA_CC_VOLTA`. On a P100 (sm_60) that means the machine is compiled in and has never run: `cudaGraphLaunch` count is zero in every profiler trace ever taken on this box. The unlock ships on this branch as a three-line source edit (commit `3d19fc4` in `llama.cpp/`, `ggml-cuda.cu` +3/−1) plus one environment variable:
+
+- `GGML_CUDA_GRAPH_FORCE` unset, empty, or `0` — behavior identical to the build without the edit, re-verified on this box (a smoke run and a full A/B arm both match the pre-patch build).
+- any other value — the arch gate is skipped and the graph pipeline runs on pre-Volta silicon. Nothing else is bypassed: the pipeline's own node-compatibility check still runs, and the internal AllReduce keeps running outside any graph (it is issued through the scheduler's comm interface, `ggml_backend_comm_allreduce_tensor`), so the capture region never contains the AllReduce's host-synchronization calls.
+
+Results on the four-card box (4x P100-PCIE-16GB physical, `-sm tensor -ts 16,16,16,16`, `-c 4096 -fa on`, f16 KV cache, `-p Hello`, `--temp 0`, llama-cli `-st`; tok/s):
+
+| model | length | graphs off | `GGML_CUDA_GRAPH_FORCE=1` | Δ | output check |
+|---|---|---|---|---|---|
+| qwen3.8-27B-MTP-Q8_0 | tg128 (MTP, 3 tok/step) | 34.13 (7 runs, 33.8-35.6) | **39.30 ± 0.15** (3 runs) | **+15.2%** | MD5 identical, 4 runs across both settings |
+| qwen3.8-27B-MTP-Q8_0 | n=2048 | 33.4 | **40.1** | **+20.1%** | — |
+| qwen3.8-27B-UD-Q8_K_XL | tg128 | 32.5 | **37.4** | **+15.1%** | identical text |
+| qwen3.8-27B-UD-Q8_K_XL | n=2048 | 32.4 | **37.9** | **+17.0%** | **MD5 identical, all 2048 tokens** |
+| qwen3.6-35B-A3B-UD-Q6_K_XL (MoE, 3B active) | tg128 | 33.6 | **78.4** | **+133%** | identical text |
+| qwen3.6-35B-A3B-UD-Q6_K_XL (MoE) | n=2048 | 33.6 | **83.8** | **+149%** | **MD5 identical, all 2048 tokens** |
+
+A `llama-server` cross-check on the 27B-UD (single shots, same flags): 38.52 and 39.85 tok/s, consistent with the cli number. (An earlier edition of this note read the slot-log `graphs reused = 127/128, 253/256` counter as evidence of CUDA-graph replay; that reading was wrong — the counter tracks llama-side compute-graph reuse and increments at roughly one per token with graphs disabled too. The paired speed delta, or an nsys `cudaGraphLaunch` count, is the evidence.)
+
+**Server absolutes are operating-point-dependent; judge by the paired delta.** The table above is the llama-cli microbenchmark point: bare one-token prompt, `--temp 0`, greedy sampling, no streaming. A real server request carries the full sampler chain (top-k/top-p/min-p/repetition-penalty/DRY), streaming, and a context that grows while it generates, and the absolutes move accordingly. Paired server A/B on this box (identical 378-token prompt, temp 0.8, webui request, tensor split, two independent runs per model):
+
+| model | server, graphs off | server, `FORCE=1` | server ratio | cli ratio |
+|---|---|---|---|---|
+| qwen3.8-27B-UD | 21.9 and 22.9 | 32.2 and 32.5 | **1.42-1.47x** | 1.15-1.17x |
+| qwen3.6-35B-A3B | 23.2 | 61.5 | **2.64x** | 2.49x |
+
+The server ratios are *better* than the cli ratios, and the reason is the same host tax wearing a different hat: with graphs off, the ~10k extra launch calls per response land on a costlier host path (slot queueing, streaming, sampler threads), so the no-graph arm is punished harder than in the bare cli loop — 27B drops from 32.5 (cli) to 22.9 (server) without graphs, while the graph arm barely moves. Absolute values still take an operating-point discount (A3B 61.5 in server against the 83.8 cli optimum): the per-request host floor — sampler, streaming, and the AllReduce enqueue path that stays outside the graphs — is roughly model-independent, so it takes the largest relative bite out of the model with the least GPU work. Two structural notes fall out of the same runs. First, with graphs off, decode speed is model-independent on this box: the 3B-active MoE at 23.2 t/s is as slow as the 27B dense at 22.9 — the host API cadence is the floor, not GPU work. Second, split mode flips once graphs arrive: without graphs `-sm layer` beats `-sm tensor` on the MoE (50.3 vs 23.2) because it never runs the AllReduce and skips that enqueue tax entirely; with graphs on, tensor wins (61.5 vs 52.5-58.6), because replay has absorbed the launch cadence and only the AllReduce enqueue remains on the host. Tensor split is where the graph unlock pays most.
+
+Why the spread. Without graphs, decode speed on this box is nearly model-independent — 34.1 (27B dense, MTP), 32.5 (27B dense), 33.6 (3B-active MoE) — because the host-side API cadence, not GPU work, sets the floor. Graphs collapse most of that cadence. nsys on a profiled 1536-round 27B run: ~22.5k individual kernel launch calls collapse into 3612 graph replays (LaunchKernel calls −27% over the run); per-round host gaps between kernels shrink from ~1.8-3.1 µs to ~1.3 µs; the four-device start waterfall per round compresses from offsets 0/14.8/34.3/67.3 µs to 0/10.8/19.3/40.9 µs; the mean decode round drops from ~651 µs to ~570 µs. That last number was predicted from the launch counts (−88 µs/round) before it was measured (−81 µs) — within ~10%, and the part of this result most likely to transfer to other boxes. What is left after the collapse is each model's real GPU work — and the MoE's is small (3B active parameters, device-local experts), so its ceiling sits far above the dense models'.
+
+Where it does not reach: the AllReduce enqueue path stays on the host (~22 µs per device per round), and prefill is untouched (it was already GPU-bound; prompt numbers on a 1-token prompt are fixed-cost noise either way).
+
+Correctness: every A/B above ran at `--temp 0` and the two arms produced **byte-identical output** — MD5 over the full generated text at n=128 (27B-MTP, four identical hashes across both settings) and at n=2048 on both daily models (27B-UD: `ECA65C64...`; 35B-A3B: `3C95B9ED...`). One alarming-looking output during validation — an emoji-catalogue spiral at n=2048 — was produced *identically by the no-graph arm* and traced to the sampling setup, not the graph path: `--temp 0` plus `--ignore-eos` plus a bare "Hello" drives greedy decoding into a repetition attractor once the model ends a sentence with an emoji. Normal sampling with EOS enabled does not enter it; if you ever see such a spiral, suspect the sampler settings before the build.
+
+MTP interplay: the graph win does not require speculative decoding (the 27B-UD rows are single-token steps) and does not move the MTP break-even: graphs cheapen every decode round proportionally, and the acceptance threshold (~2 of 3 drafts) is a ratio of two graph-cheapened quantities. On workloads with low draft acceptance, run MTP off and keep the graph win.
+
+Usage: `set GGML_CUDA_GRAPH_FORCE=1` per window or `setx GGML_CUDA_GRAPH_FORCE 1` persistently (Windows); `export` on Linux. Unset is exactly the old behavior.
+
+**Exit time with graphs on.** On this box, Ctrl+C with `GGML_CUDA_GRAPH_FORCE=1` takes 40-55 s to return to the prompt, versus under 1 s with graphs off, regardless of model: the cached graph execs on each of the four cards are torn down one by one in synchronous driver calls, and each call is expensive on this pre-Volta driver. This is exit-time only — running performance, timing output and results are unaffected (the logs finish printing before the delay starts). For daily use, stop the server with `taskkill /f /im llama-server.exe` (point it at a specific `/pid` if several instances are running, and avoid killing mid-request); llama-server keeps no persistent state — model, KV cache and graphs all live in VRAM and die with the process, and the driver reclaims everything, so the next start is clean.
+
+**`--batch-size` / `--ubatch-size`, briefly.** `ubatch` is the physical micro-batch the prefill kernels compute per launch; activation VRAM grows linearly with it (at 4096 with a 262k context reserved, this box sits at ~14 of 16 GB per card). `batch` is the logical queue depth the scheduler may accumulate across slots — near-free in VRAM, must be >= ubatch; 2-4x ubatch is a normal choice. Neither moves token generation: decode pushes at most `--parallel` tokens per step through the GPU whatever the ubatch is set to (27B measured identical at ubatch 2048 and 4096). They matter only for prefill of prompts longer than one ubatch, where a larger ubatch cuts per-ubatch AllReduce round trips — with diminishing returns on this already cuBLAS-heavy path, and a real VRAM bill.
+
+### Also on this branch: AllReduce P2P staging (dormant on this box)
+
+Commit `32b9763` (allreduce.cu, +63/−2) adds a peer-to-peer staging variant to the internal AllReduce, `GGML_CUDA_AR_P2P` (default on): at init it probes `cudaDeviceCanAccessPeer` for every device pair, enables peer access where accepted, and falls back **all-or-nothing** to the existing copy staging when any pair is rejected. On this four-card dual-socket box every cross-socket pair is rejected (`can = 0`), so the variant sleeps — outputs byte-identical through every MD5 gate above, hot path untouched. On a same-socket-only topology it would activate; the P2P direction is so far validated only by a standalone probe (all 6 same-socket pairs live), not end-to-end. Two cautions: this is independent of upstream's `GGML_CUDA_P2P` flag — that one gates the scheduler's generic peer copies, and its 10.7x cross-socket regression is documented above; different mechanism, different code path. And on a box whose hardware *accepts* cross-socket peer access but services it pathologically (the two-card UPI box much of this README grew on), the default-on probe would activate P2P staging there — if you measure a regression in that situation, `GGML_CUDA_AR_P2P=0` restores the copy staging without a rebuild.
+
 ## Credit
 
 llama.cpp is MIT, © the ggml authors. Patches here are against it and carry the same licence. AI (Claude) was used substantially in the investigation and to write the code and these notes; the `Co-authored-by` trailers in the patches record that.
 
-The `p100-gp100-fp32` branch additions — the fp32 FA-GEMM default, the ALGO4 removal, the `mmvq-gp100` GLU guard, and the NaN investigation above — are key-sh's work (2026-10), under the same licence.
+The `p100-gp100-fp32` branch additions — the fp32 FA-GEMM default, the ALGO4 removal, the `mmvq-gp100` GLU guard, the NaN investigation above, the `GGML_CUDA_GRAPH_FORCE` pre-Volta graph unlock, and the AllReduce P2P staging variant — are key-sh's work (2026-10), under the same licence.
