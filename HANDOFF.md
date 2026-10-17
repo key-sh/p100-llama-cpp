@@ -325,3 +325,39 @@ setx GGML_CUDA_GRAPH_FORCE 1（异常先 =0 复验）；27B ubatch 4096/batch 81
 A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽验 M1 模板。
 
 <!-- ===== HANDOFF.md v5 结束 ===== -->
+
+---
+# HANDOFF v8 增量段（v8-R1~R13，2026-10-17，#25593 收窄修法战役收官）
+
+> 承 v5（P12 图解锁战役）；v6/v7 过渡轮存于聊天窗口累积摘要，本文自 v5 直接续写 v8 收官段。
+> 本段主角：上游 issue #25593（Pascal GP100 fp16 GEMM logits 污染）——收窄修法 + KLD 终审 + 双 README 专节落账。
+
+## 1. 本轮闭合项
+
+- **R22 悬案（速度侧）闭合**：server 贪心实测约 40.8±1.1 tok/s，44~47 区间判伪。
+- **诊断 A 闭合（P17 一期关闭）**：mean(A1,A2)−mean(B1,B2)=−1.29 ms/tok，方向翻转落带外更低侧 → P17 收益上限不成立，主攻降级回内核项，#25593 排序被实测证实。三知悉：①图解锁后 host 采样成本≈0（被 GPU 每步空闲窗口吸收）；②内容相关性约 2 ms/tok（~6%），A/B 测速必须锁同 prompt+同采样；③图后创作口径整体优于 v5 锚点，跨 prompt 不可直比。
+
+## 2. 主攻 #25593：收窄修法与 KLD 终审
+
+- **修法锁定**：vecdotq.cuh:157/228/271 依赖 FAST_FP16_AVAILABLE（0007 号 MMVQ 收益命脉）→ 上游标准三行修法否决；收窄单点修法=common.cuh:311 fast_fp16_hardware_available 补 && cc != 600。调用面：ggml-cuda.cu:1627/1628（cuBLAS compute type，目标）与 :1954（MMQ，sm_60 不可达）；MMVQ/FA tile/mmvf 零波及。附带披露：GGML_CUDA_FA_GEMM_PREC=16 逃生门经 :1628 被设计性强制回 FP32。
+- **验证链**：块1 修前三连（golden 5AF6FA2C 三连一致）→ 打补丁构建（DLL 时间戳链坐实进构建）→ 块2 修后 golden 位级相等（预注册红旗）→ 溯源 P（CMAKE_HOME_DIRECTORY+DLL 时间戳，H2 排除）→ H1 落锤=11-token 贪心探针盲区（短 prompt + f16 KV 吞掉 prefill 累积误差）→ 终审改道 KLD。
+- **KLD 终审**：语料（镜像不可达 → fallback tools/server/README.md 108KB，调了一个月 server、拿它的说明书审计它，自指闭环）→ truth base（f32 KV / -fa off / ctx512 / chunks16，PPL 2.5724，2.03GB）→ BUGGY 臂（mean KLD 0.003704±0.000224、Same top p 98.064%、Max Δp 37.9%、PPL 税 +0.35%）→ NEW 地板臂（RMS Δp 0.001%、Same top p 100.000%、Max KLD 0.000055）→ 终审判定：全部分位提升 ≥1000×（主判据 median÷median 数值退化=修得太好，按预注册兜底条款切分位比值）。apollo 面板 96.53% 与本机 98.06% 同族指纹交叉验证。MMVQ half2 decode 假说关闭（<2× 分支死亡，prefill 16F=主毒源）。
+- **速度侧**：探针 tg 35.148→35.423、创作口径 28.65→28.61，均噪声级——修复设计上不碰 decode。
+
+## 3. 落账
+
+- 5216f92（修法，1 file changed）→ de26e65（语料入库+gitignore truth25593.bin）→ 2ce560c（双 README 专节）→ 本 commit；push myfork 一次推 6。
+- 精确性注记：5216f92 body 的 “Golden MD5 regime change” 措辞偏满——探针实测位级不变（盲区），权威证据=KL 面板 1.94%→0% 的 argmax 翻转清零，以 README 专节表述为准。
+- tools/golden.ps1、mtp_test.ps1、apply_nc.py.archived 经考证 98cbe9b 已入库（遗留清单 ghost，见认账㉛）。
+- KLD 审计面板（语料+truth base+16 分块对账）沉淀为 fork 可复用数值审计工具：未来 P16 融合、GDN 移植等一切数值敏感改动可上此终审法庭。
+
+## 4. 认账追加（㉒~㉜，本轮 11 条）
+
+- ㉒ R1 开局 tip 断言未实跑 §0.1 命令组（避坑①家族，块 P 补课）。㉓ “golden 必变” 门先验未按收窄修法适配 → 假红旗（探针盲区）。㉔ 明读避坑⑤仍以 --version 判身份；身份判据=git log+DLL 时间戳+diff 状态。㉕ PS 控制台多行块粘贴截断 → 全单行纪律。㉖ 行内 throw 不阻断逐行粘贴 → 拆块制+块首重验前置。㉗ native exe 直连 PS 管道在 EA=Stop 持久会话被良性 stderr 击杀 → cmd /c 重定向+EA=Continue。㉘ 固定 Tail 窗截掉估计行 → Select-String 精确抓取。㉙ KL 模式输出格式外推失误 → 按日志实貌改判。㉚ 主判据 median÷median 数值退化（修复太好）→ 预注册兜底条款切分位比值。㉛ 遗留清单未查仓库账 → tools ghost（98cbe9b）。㉜ 默认编码读写 UTF-8 文件（mojibake 虚惊+Add-Content ANSI 地雷）→ [System.IO.File] 显式 UTF8 no BOM 纪律。
+
+## 5. 下轮路线
+
+- **§3.2 重定标（统一闭）**：图后 /completion 创作口径整体优于 v5 锚点且跨 prompt 不可直比——#25593 落账后重定标，恢复跨轮可比性。
+- 候选批（廉价批）重启：顺位待 §3.2 重定标后重排。
+- 长期旗：本 KLD 面板为一切数值敏感改动的验收闸门。
+--- v8 增量段结束 ---
