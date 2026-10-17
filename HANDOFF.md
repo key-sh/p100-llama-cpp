@@ -591,3 +591,50 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 - **后续方向**：§1.7 末尾 ①②③（层融合减 AR 次数/异步 AR 重评估/one-shot AR for small messages 审计）。
 
 <!-- ===== HANDOFF.md v8 结束 ===== -->
+
+<!-- ===== HANDOFF.md v8.1 增补段（追加于 v8 结束标记之后；v8 正文 L1-593 未动，只增不删）===== -->
+
+## 【v8.1】7. wave1 host 补丁战役档案（#11+13+21，+5.5%）
+
+### 7.1 判决与数字
+- 战役：作者五件套 host 侧三件（#11 penalties-direct / #13 sampler-prefilter / #21 sched-reset-lazy）打包 wave1。
+- 文档层级：本节为详细档；README.md 与 README.zh-CN.md 末尾各有面向用户的摘要专节，三件套同 commit 同步（冲突以 README 为准）。
+- 判决：合并入主分支。三独立 commit f5aadb6(#11,+42) / 164a88e(#13,+178,-5) / d59c2f8(#21,+37,-2) 已 push myfork；行数 forensic 257/7 与 W1 diff --stat 逐字吻合。
+- 速度：ABBA R27（a=OLD 33.94/34.59；b=NEW 36.52/36.23；c=NEW 36.44/36.21；d=OLD 34.40/34.94）→ 配对 b-a=+6.16%、c-d=+4.77%，总体 NEW 36.35 vs OLD 34.4675 = +5.46%；前会话复现（OLD 8 读 34.581 vs NEW gold 36.49 = +5.52%）；OLD/NEW 分布零重叠。
+- 口径 A 基线：34.42 → 36.35 t/s（R27 b/c 均值）。B/C 口径未复测，下次跑相应模型时重锚。OLD 基线参照物封存：D:\temp\r26bin_old（063e9b1 二进制）+ 34.585/34.581 数字档。
+- 放大机制：作者单卡口径 #21 单件 +0.94%；本机四卡张量并行 decode 为宿主编排绑定（J2b 宿主空转 55-60% wall）→ host 侧节省放大约 4 倍。pp 持平 / tg 独涨指纹成立。
+- anchor 记录：a2 in-band [34.2,34.7]；d2=34.94 超带上沿 +0.24，方向保守（最保守交叉配对 36.21/34.94 仍 +3.6% 地板），入档不阻塞。
+
+### 7.2 golden 三硬门（持久基准，候选构建必过）
+- G1 贪心正文 MD5：固定 prompt 128tok temp0 → 7ddfbfe1aa5339aa6622f51b2c24fbec。
+- G2 全概率哈希（KLD 等效，位级强于分位比值口径）：n_probs10 全位置 top10 概率数组哈希 → 75c7b773f22c7434daa6ac59c72d5b49（probs_n=64）。
+- G3 #29466 二请求（同 slot 两个不同 prompt cache_prompt=true）：G3a=dc6f500426ecc74f78e13839ae37cc3d、G3b=a88b048dbe37fdf3a63a72116fb13941。
+- 基准文件 D:\temp\g_hash_old.txt（063e9b1 构建生成）；wave1 NEW 侧 4/4 逐位 PASS。以后候选构建只重跑 NEW 侧（换后缀）比对。
+- 勘误链：G2 首轮失败为读取侧编码（认账 53），数据本身从未异常--修复自校验=纯 ASCII 三行与首轮逐字同。
+
+### 7.3 方法论增补（接 5.3）
+- 多 hunk 补丁先 @@ 普查或 --reject（git apply --check 同文件首败即中止后续 hunk 检测，认账 54）。
+- server 多臂操作命令必须物理写全每一条，引用式缩写一律禁止（认账 50/51/52 同族）。
+- PS 5.1 读 UTF-8 文件一律显式 -Encoding UTF8（认账 53）；写 UTF-8 用 [System.IO.File] 显式 no BOM（认账 32 再确认）。
+- golden 现场重建法：OLD 基线二进制现场生成基准（g_hash_old.txt）优于翻历史存档（同 session 同条件）。
+
+### 7.4 认账增补（5.4 续；ASCII 编号防编码坑；44 编号未见于累积摘要，待查）
+- 43 漏 --directory 导致补丁落错层。
+- 45 目标版本未取证（v0.5.0）。
+- 46 框架缺失推断错误。
+- 47 P2 图样误读。
+- 48 PS foreach 接管道。
+- 49 gap_sum_ms 单位标注错（ms 实为 µs；busy+gap=wall 一致性检查救场）。
+- 50 引用式命令一：W2 server 启动写同某臂 → 用户无命令可贴、探针空转。
+- 51 引用式命令二：R19 包臂 b/c/d 同臂 a 仅两处替换 → ABBA 破坏成 OLLL；硬规则=多臂命令物理写全。
+- 52 引用式命令三：惯用 golden fixture 依赖摘要外知识未带字面命令；golden 三硬门定义与实现入档。
+- 53 Get-Content 缺 -Encoding UTF8：GBK 误读 UTF-8 多字节破坏 JSON（铁证 token 鈥? bytes[226,128,166]=U+2026 被吞半字节）；规则=读 UTF-8 显式 -Encoding UTF8。
+- 54 git apply --check 同文件首败即中止 → J4 判 22 仅 1 hunk 败为伪影；22 实为 22 hunk、核心区 API 断层需语义移植；纪律=@@ 普查或 --reject。
+
+### 7.5 wave2 前瞻（#22 decode-sched-slots）
+- 规模：2 文件 22 hunk（.cpp 21 + .h 1）。作者基线 API：gf_res_prev_active / get_gf_res_prev() / sched_active()；本树 0.5.0：gf_res_prev(unique_ptr) / 无 active 标志 / sched.get()。第一组映射：gf_res_prev_active = nullptr 与 gf_res_prev->reset() 对应（memory_update L813 与 graph_reserve L2417 位置精确对齐）。
+- 判性：.h hunk 直接落（上下文匹配 + sched_active inline 自洽）+ 手工加 gf_res_prev_active 成员一行；.cpp 机械约 13 hunk（sched.get → sched_active）--reject 批量；手工 3 处（#4/#14 映射 + #15 插入锚点）；语义重写 2 处（#5 process_ubatch 主改写约 104 行 + #6 alloc 回退约 69 行，get_gf_res_prev() 翻译为 gf_res_prev.get()）。
+- 门：golden 三门位级全过 + WARN 门（decode slot cannot hold this graph 稳态禁现 = slot 池被放弃即补丁白打）+ graphs reused 降级为记录项（slot 命中会改计数，方向=更多复用）。
+- 状态：预注册中。+5.5% 已入账，wave2 为可选项非欠债。
+
+<!-- ===== HANDOFF.md v8.1 增补段结束 ===== -->

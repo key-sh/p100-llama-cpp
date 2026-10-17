@@ -312,3 +312,19 @@ The `p100-gp100-fp32` branch additions — the fp32 FA-GEMM default, the ALGO4 r
 **Golden probe note**: the 11-token greedy MD5 probe is bit-identical pre/post fix (probe blind spot: short prompts rarely reach poisoned positions). The KL panel above is the authoritative evidence.
 
 **Disclosure**: GGML_CUDA_FA_GEMM_PREC=16 escape hatch is now forced back to FP32 by design (ggml-cuda.cu:1628 guard).
+
+---
+
+## This branch (key-sh): host decode patch series (sbp 11/13/21), 2026-10-18
+
+The upstream-fork author qr0n maintains a host-side series (the sbp patches) targeting decode orchestration. Three of them are now landed on this branch as three commits: f5aadb6 (#11 penalties-direct), 164a88e (#13 sampler-prefilter), d59c2f8 (#21 sched-reset-lazy). All three are pure host/C++ changes: no kernel and no numeric change is intended, and none was measured.
+
+**Four-card measurement** (4x P100-PCIE-16GB, -sm tensor -ts 16,16,16,16, qwen3.8-27B-UD-Q8_K_XL, ctx 262144, ubatch 1024, batch 4096, threads 20, full sampler chain incl. penalties and DRY, GGML_CUDA_GRAPH_FORCE=1, llama-server, 256-token probe; ABBA design, two sessions): decode 34.47 -> 36.35 tok/s = **+5.46%** (paired arms +6.16% / +4.77%; OLD and NEW distributions disjoint over all 12 runs; a second session reproduced +5.52%). Prompt processing unchanged - the fingerprint expected of host-orchestration-bound decode (55-60% of decode wall time is host idle on this box; HANDOFF.md v8.1 has the mechanism work).
+
+**Operating-point note**: these absolutes are not comparable with the GGML_CUDA_GRAPH_FORCE table above (different context size, split, sampler chain and probe shape); judge by the paired delta, per the standing rule of this README.
+
+**Bit-level correctness** (all three together vs the pre-patch build; greedy and full-sampler paths): 128-token greedy output MD5, the full top-10 probability array over 64 positions (a bit-level KLD equivalent), and a cross-request slot-state probe (two different prompts on a cached slot, second output byte-identical) - all byte-identical. The scheduler change does not perturb graph-reuse counts (254/507, unchanged across sessions).
+
+**Amplification**: the series author measured #21 alone at +0.94% on a single-GPU box; the roughly 4x larger effect here is consistent with four-way tensor-parallel decode being host-orchestration bound, i.e. more per-step host work for these patches to remove.
+
+Full methodology (preregistration bands, golden-gate checksums, session logs): HANDOFF.md section 7 (v8.1 addendum).
