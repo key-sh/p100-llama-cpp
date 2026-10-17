@@ -592,7 +592,7 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 
 <!-- ===== HANDOFF.md v8 结束 ===== -->
 
-<!— ===== HANDOFF.md v8.1 增补段（追加于 v8 结束标记之后；v8 正文 L1-593 未动，只增不删）===== -->
+<!-- ===== HANDOFF.md v8.1 增补段（追加于 v8 结束标记之后；v8 正文 L1-593 未动，只增不删）===== -->
 
 ## 【v8.1】7. wave1 host 补丁战役档案（#11+13+21，+5.5%）
 
@@ -610,7 +610,7 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 - G2 全概率哈希（KLD 等效，位级强于分位比值口径）：n_probs10 全位置 top10 概率数组哈希 → 75c7b773f22c7434daa6ac59c72d5b49（probs_n=64）。
 - G3 #29466 二请求（同 slot 两个不同 prompt cache_prompt=true）：G3a=dc6f500426ecc74f78e13839ae37cc3d、G3b=a88b048dbe37fdf3a63a72116fb13941。
 - 基准文件 D:\temp\g_hash_old.txt（063e9b1 构建生成）；wave1 NEW 侧 4/4 逐位 PASS。以后候选构建只重跑 NEW 侧（换后缀）比对。
-- 勘误链：G2 首轮失败为读取侧编码（认账 53），数据本身从未异常—修复自校验=纯 ASCII 三行与首轮逐字同。
+- 勘误链：G2 首轮失败为读取侧编码（认账 53），数据本身从未异常——修复自校验=纯 ASCII 三行与首轮逐字同。
 
 ### 7.3 方法论增补（接 5.3）
 - 多 hunk 补丁先 @@ 普查或 --reject（git apply --check 同文件首败即中止后续 hunk 检测，认账 54）。
@@ -637,4 +637,4 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 - 门：golden 三门位级全过 + WARN 门（decode slot cannot hold this graph 稳态禁现 = slot 池被放弃即补丁白打）+ graphs reused 降级为记录项（slot 命中会改计数，方向=更多复用）。
 - 状态：预注册中。+5.5% 已入账，wave2 为可选项非欠债。
 
-<!— ===== HANDOFF.md v8.1 增补段结束 ===== -->
+<!-- ===== HANDOFF.md v8.1 增补段结束 ===== -->
