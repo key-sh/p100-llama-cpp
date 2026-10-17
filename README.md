@@ -294,3 +294,21 @@ Why the default flipped. The variant is only reachable on all-peer topologies �
 llama.cpp is MIT, © the ggml authors. Patches here are against it and carry the same licence. AI (Claude) was used substantially in the investigation and to write the code and these notes; the `Co-authored-by` trailers in the patches record that.
 
 The `p100-gp100-fp32` branch additions — the fp32 FA-GEMM default, the ALGO4 removal, the `mmvq-gp100` GLU guard, the NaN investigation above, the `GGML_CUDA_GRAPH_FORCE` pre-Volta graph unlock, and the AllReduce P2P staging variant — are key-sh's work (2026-10), under the same licence.
+
+---
+## GP100 (sm_60) cuBLAS fp16 fix - upstream issue #25593 carveout (2026-10-17)
+
+**One-line fix**: fast_fp16_hardware_available() now excludes cc==600, so cuBLAS GEMM on P100 accumulates in FP32 instead of silently poisoned FP16. Decode paths (MMVQ, FA tile, mmvf) are untouched by design.
+
+**Why carveout**: the standard upstream fix (compile-wide FAST_FP16_AVAILABLE off) would also kill the 2.03x MMVQ win from patch 0007 on sm_60 (no DP4A). This fix narrows to the cuBLAS-only call site (ggml-cuda.cu:1627/1628; the MMQ site is unreachable on sm_60).
+
+**4xP100 KLD audit** (16-chunk KL vs f32-KV/-fa-off truth base, 108KB server-README corpus):
+
+- Mean KLD 0.003704 -> below display precision; all percentiles >= 1000x better (max KLD 0.501 -> 0.000055)
+- Same-top-p 98.064% -> 100.000% (1.94% of tokens had a wrong argmax before the fix)
+- RMS dP 2.240% -> 0.001%; PPL tax +0.35% repealed (PPL(Q)/PPL(base) 1.0035 -> 1.0000)
+- Decode speed unchanged by design; prefill within the content-correlated noise band (+/-6%)
+
+**Golden probe note**: the 11-token greedy MD5 probe is bit-identical pre/post fix (probe blind spot: short prompts rarely reach poisoned positions). The KL panel above is the authoritative evidence.
+
+**Disclosure**: GGML_CUDA_FA_GEMM_PREC=16 escape hatch is now forced back to FP32 by design (ggml-cuda.cu:1628 guard).

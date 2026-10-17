@@ -289,3 +289,21 @@ server 比值*优于* cli 比值，原因还是那笔宿主税换了顶帽子：
 llama.cpp 为 MIT 许可，© the ggml authors。本仓库的补丁针对它，携带相同许可。调查过程与代码、文档写作大量使用了 AI（Claude）；补丁中的 `Co-authored-by` 尾注记录了这一点。
 
 `p100-gp100-fp32` 分支的新增内容——FA-GEMM 的 fp32 默认、ALGO4 移除、`mmvq-gp100` 的 GLU 守卫、上文的 NaN 调查、`GGML_CUDA_GRAPH_FORCE` 的 Volta 前图解锁、以及 AllReduce P2P staging 变体——为 key-sh 的工作（2026-10），适用相同许可。
+
+---
+## GP100 (sm_60) cuBLAS fp16 修复 —— 上游 #25593 收窄裁剪（2026-10-17）
+
+**一行修法**：fast_fp16_hardware_available() 排除 cc==600，P100 的 cuBLAS GEMM 改用 FP32 累加，替代被静默污染的 FP16 路径；decode 侧（MMVQ、FA tile、mmvf）设计上零波及。
+
+**为何收窄**：上游标准三行修法（编译期整体关闭 FAST_FP16_AVAILABLE）会连带杀死 0007 号补丁在 sm_60（无 DP4A）上的 2.03x MMVQ 收益；本修法收窄到 cuBLAS 唯一调用点（ggml-cuda.cu:1627/1628；MMQ 调用点在 sm_60 不可达）。
+
+**四卡 P100 KLD 审计**（16 分块 KL 对账，真值基座 = f32 KV / -fa off，语料 = 108KB server README）：
+
+- Mean KLD 0.003704 -> 低于显示精度；全部分位提升 >= 1000 倍（最大 KLD 0.501 -> 0.000055）
+- Same-top-p 98.064% -> 100.000%（修复前 1.94% 的 token argmax 被换）
+- RMS dP 2.240% -> 0.001%；PPL 税 +0.35% 免除（PPL(Q)/PPL(base) 1.0035 -> 1.0000）
+- decode 速度设计上不变；prefill 落内容相关噪声带（±6%）内
+
+**golden 探针注记**：11-token 贪心 MD5 探针修复前后位级相同（探针盲区：短 prompt 极少命中毒位）。上表 KL 面板为权威证据。
+
+**披露**：GGML_CUDA_FA_GEMM_PREC=16 逃生门设计上被强制回 FP32（ggml-cuda.cu:1628 守卫）。
