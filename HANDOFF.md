@@ -11,6 +11,8 @@
 > argmax 翻转 1.94%→0%、decode 0% 噪声级）；诊断 A 证伪 P17 一期（−1.29 ms/tok，主攻位空缺）；
 > R22 悬案闭合（40.8±1.1，44~47 判伪）；tools ghost 闭合（98cbe9b 早已入库）；
 > KLD 面板沉淀为常设数值闸门；代码成果=5216f92/de26e65/2ce560c/0133a37。
+> 【v8.1】wave1 host 三件套战役档案=§7：+5.46% 入库、golden 三硬门基线、方法论与认账 43-54、wave2 预注册（§7.5 状态已被 v8.2 更新）。
+> 【v8.2】#22 decode slot pool 战役档案=§8：移植→验证拦截→取证→判死不可 ship（上游 #29466 互链，代码存档 archive/22-decode-slotpool）；认账 55-81；§7.5 状态行已更新。
 > 权威数据源：根目录 README.md / README.zh-CN.md 专节；README 与本 HANDOFF 冲突时以 README 为准。
 > v5/v6/v7 全部内容保留未删减；【v8】为修订与勘误标注，与 v7 原文冲突处以【v8】为准。
 
@@ -20,7 +22,9 @@
 §3.7 外部核查档案｜§3.8 诊断 B｜§6 P19 档案｜§4 遗留追加｜§5.4 认账⑲
 【v7】§0.1 避坑④⑤⑥｜§0.2 第 5 条｜§1.7 PCIe 带宽认知专节（必读）｜§3.1 主攻修订｜
 §3.6 带宽类项预期修订｜§3.8 诊断 B 实测结果｜§5.4 认账⑳
-【v8】§0.1 tip/二进制身份更新｜§1.1 仓库/素材行｜§1.4 增补｜§1.5 R22 闭合｜§2.1 tools ghost 闭合｜
+【v8】§0.1 tip/二进制身份更新｜§1.1 仓库/素材行｜§1.4 增补｜§1.5 R22 闭合｜§2.1 tools ghost 闭合｜ §2.2 补丁表增补｜§3.0 增 #25593/P17 结项｜§3.1 主攻重排（P16 上位）｜§3.3 P17 改判｜§3.5 打法更新｜ §3.6 表修订｜§3.7 #25593 行更新｜§3.8 收官档案（含两处勘误）｜§4 遗留大扫除｜§5.1 commit 链｜ §5.4 认账㉒~㉝
+【v8.1】§7 wave1 战役档案（判决/数字/三门/方法论/认账 43-54）｜§7.5 wave2 预注册
+【v8.2】§7.5 状态更新（#22 已判死）｜§8 #22 战役档案（8.1 判决/8.2 取证/8.3 保全与重启/8.4 基线勘误与门套/8.5 认账 55-81）
 §2.2 补丁表增补｜§3.0 增 #25593/P17 结项｜§3.1 主攻重排（P16 上位）｜§3.3 P17 改判｜§3.5 打法更新｜
 §3.6 表修订｜§3.7 #25593 行更新｜§3.8 收官档案（含两处勘误）｜§4 遗留大扫除｜§5.1 commit 链｜
 §5.4 认账㉒~㉝
@@ -635,6 +639,36 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 - 规模：2 文件 22 hunk（.cpp 21 + .h 1）。作者基线 API：gf_res_prev_active / get_gf_res_prev() / sched_active()；本树 0.5.0：gf_res_prev(unique_ptr) / 无 active 标志 / sched.get()。第一组映射：gf_res_prev_active = nullptr 与 gf_res_prev->reset() 对应（memory_update L813 与 graph_reserve L2417 位置精确对齐）。
 - 判性：.h hunk 直接落（上下文匹配 + sched_active inline 自洽）+ 手工加 gf_res_prev_active 成员一行；.cpp 机械约 13 hunk（sched.get → sched_active）--reject 批量；手工 3 处（#4/#14 映射 + #15 插入锚点）；语义重写 2 处（#5 process_ubatch 主改写约 104 行 + #6 alloc 回退约 69 行，get_gf_res_prev() 翻译为 gf_res_prev.get()）。
 - 门：golden 三门位级全过 + WARN 门（decode slot cannot hold this graph 稳态禁现 = slot 池被放弃即补丁白打）+ graphs reused 降级为记录项（slot 命中会改计数，方向=更多复用）。
-- 状态：预注册中。+5.5% 已入账，wave2 为可选项非欠债。
+- 状态：【v8.2 更新】#22 已执行完毕并判死（不可 ship），全程档案见 §8；+5.5% 已入账，wave2 余下件为可选项非欠债。
 
 <!-- ===== HANDOFF.md v8.1 增补段结束 ===== -->
+
+<!-- ===== HANDOFF.md v8.2 增补段（追加于 v8.1 结束标记之后；v8/v8.1 正文未动，只增不删）===== -->
+
+## 【v8.2】8. #22 decode slot pool 战役档案（移植→验证拦截→取证→判死）
+
+### 8.1 判决
+- 战役：作者 wave2 首件 #22（decode slot pool：小型 decode 图保留独立 llm_graph_result+专属调度器，命中即整图重放）移植；预期 +1~3%（wave1 宿主编排绑定红利的同一区）。
+- 判决：**不可 ship（DO-NOT-SHIP）**。移植本身收官（cpp 4456 行+.h 426 行、五片段 .rej 权威序终审全过、构建绿、dll 活性 W1 六中），验证阶段确定性拦截：同二进制同旗标同请求序列，池武装→第二请求（原生 /completion+n_probs）launch 即崩 **GGML_ASSERT(ggml-backend-meta.cpp:2020 bcj.nodes[i]) failed**；池解武（LLAMA_DEC_MAX_TOK=0）→四探针全过且与 OLD 臂位级全同（BITS=4/4 PASS、graphs reused 127/189/219/220 逐字同）。ABBA R28 取消；README 无新增；wave1 +5.46% 分毫不差。
+- 定性（R54 上游检索修正）：同类 issue **#29466**（同 assert 行 2020、同 request-1 OK/request-2 崩、同 P100+-sm tensor、上游 v0.4.0 无槽池亦可触发）→ #22 非孤立缺陷，而是**确定性暴露上游"图保持×meta 重建"既有脆弱面**；旁证 #30075（同面另一症状）与 draft #24549（TP 下 graph reuse 兼容草案）。反馈路线=在 #29466 下补充证据评论，不开新帖。
+
+### 8.2 取证定案（R53 源码解剖，>85% 置信）
+- 冲突面：main+4 slot 五个调度器共享同一 meta backend 实例（同 backend_ptrs 创建）→ 共享 uid/backend_configs；KV buffer=跨调度器共享 meta buffer；重建即翻代清空注册表（ggml-backend-meta.cpp L1996-2004）而 simple_tensor 仅搜当前代（L452/L481-484，查无返 nullptr→断言）；槽池让旧图跨请求存活，任何其他 uid 的图重建即摧毁其注册。崩溃路径仅多卡 TP（meta backend 专属），单卡不可能触发；且需混合图序列（不同 uid 交替=混合端点/混合形状）。
+- 独立修复判不可行（把握<40%）：治本必动 ggml-backend-meta.cpp=wave1 地基（风险纪律禁止）；#22 内规避式修复对不准观测崩溃点且废跨请求价值。
+
+### 8.3 代码保全、重启路径与收官后状态
+- 归档分支 **archive/22-decode-slotpool**（commit 注记 DO-NOT-SHIP+#29466 交叉引用）；主线回 b669e86 干净基线（.rej 已删）。
+- 上游若给出修复指引：checkout 归档分支→按指引改码→重跑 L1-L6 位级四探针+WARN 门→全过再议 ABBA R28（合并线 ≥+0.4% 不变）。
+- 【v8.2 收官后 §0.1 预期状态更新】tip≥b669e86+本 v8.2 commit、树干净、分支 p100-gp100-fp32、**另有归档分支 archive/22-decode-slotpool**（勿在其上做新战役）。
+
+### 8.4 基线勘误与门套演进（接 §7.2）
+- §7.2 存档四哈希（7ddfbfe1/75c7b773/dc6f5004/a88b048d）=063e9b1 时代 rig 专属；r28bin_base（b669e86 tip，含 wave1）时代现场重建基准=**D:\temp\g_hash_old_r.txt（G1 ee213b33 / G2′ 373ec40b / G3a 47aeb7a7 / G3b 8772366b）**；两代 prompt_n 16→35 铁证模板渲染漂移（认账74），跨时代锚点只作软参考。
+- 探针家族价值实证：G2′（原生 /completion+n_probs）=四探针中唯一踩原生路径者=唯一抓到崩溃者（§2.3 #29466 回归门的扩展落实：回归门=G1+G2′+G3a+G3b 全套）；G1/G3 结构上抓不到此崩。
+- 证据包（D:\temp 易失，重要件建议另行备份）：srv_r_new.crash.log、srv_r_new_b0.log、bcj_assert_context.txt、g_hash_old_r.txt、g_hash_new_r.txt（后两者 4 行 172B）。
+
+### 8.5 认账增补（接 §7.4 的 54；55-68 系 #22 移植期、未转录本档、详见战役累积摘要，其操作纪律已由 §2.3/§7.3 继承）
+- 69 golden 命令未入库→L619 现场重建原则实例化；70 PSReadLine 会话死角（㉕㉖同族）；71 命令包依赖链显式化（V1→V2…逐链标注）；72 活性三件套（tasklist/netstat/health）=一切请求包前置硬门；73 最小化服务器窗口=服务器本体（勿点勿关勿 Ctrl+C；关服唯一合法=taskkill /f /im；^C 回显入日志=人为中断铁证）；74 跨时代锚点软参考（先验 prompt_n/渲染等价再谈位级）+R28 OLD=r28bin_base 含 wave1（非 063e9b1）；75 对照组判案（同请求 OLD 成功+NEW 失败⇒差异锁定臂）+ABORT 先活性后处置。
+- 76 崩溃签名入档（GGML_ASSERT+文件:行号；fatal 扫描词表必含 GGML_ASSERT；VRAM 落回空闲=进程死亡旁证）；77 [IO.File]::WriteAllLines 长管线数组串化成单行（落盘后必 ReadAllLines 行数自证；comparator 数据比对与格式守卫分离报告）；78 decode graph slots 武装信号 lv3 不可观测（armed/disarmed 均 0 命中）→池类改动武装验证以行为学 A/B 为权威；79 假说预注册制度（取证前书面假说+CONFIRM/REFUTE 判据，防事后拟合；采证前修正概率须明示理由）；80 结构性 CONFIRM≠修复可行（治本触碰已 ship 地基或修复未对准观测崩溃点→判把握不足转外部反馈）；81 同签名上游检索（assert+文件+行号）为反馈前必做、命中即评论不开新帖、"补丁自身缺陷"vs"确定性暴露既有脆弱面"判决等价但话术必须区分。
+
+<!-- ===== HANDOFF.md v8.2 增补段结束 ===== -->
+
