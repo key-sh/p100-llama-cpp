@@ -672,3 +672,29 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 
 <!-- ===== HANDOFF.md v8.2 增补段结束 ===== -->
 
+
+---
+
+## 【v8.3】重定标收官 + P0 战役记录（2026-10-18 窗口，tip=2841a9c）
+
+### 重定标新基线（mtp_test.ps1 暖发为准）
+| 档 | 模型 | 新基线 tg | 探针 | 参照 | 增益 |
+|---|---|---|---|---|---|
+| 贪心 | I:\ 27B-MTP-Q8_0 + spec-mtp draft-3 | 44.75 | summarise | 图前 37.7~38.7 | +15.7~18.7% |
+| 创作（主场景） | G:\ 27B-UD-Q8_K_XL | 36.75（GF2=36.93） | creative | v5 锚点 32.2/32.5 | +12.7~14.1%（跨 prompt 注记） |
+| 省电 | I:\ 27B-MTP + CVG=1,2,3 + ctx131072 | 41.94 | summarise | 图前 37.00 | +13.4% |
+| MoE | G:\ 35B-A3B-UD-Q6_K_XL | 84.66 | summarise | 旧口径 61.5（R39/R41，探针差异待考古勿直比） | +37.7% |
+
+### P0 战役判决（2026-10-18）
+- 本窗口 3 崩（RC2/RC5/SA2）+ 昨晨 G2' 崩根因 = **#22 判死后 23:35 llama.dll 残留主线 Release（decode slot pool 缺省武装 dec_max_tok=4）**；wave1 双重洗清；R6"主线实证上游脆弱面"撤回。
+- 三线定案：findstr LLAMA_DEC_MAX_TOK 二进制指纹 + archive 源码默认值 + 同二进制解武 A/B（armed 3/3 崩 vs disarmed 2/2 过）。
+- 修复闭环：重建 19:08 llama.dll（无池指纹）→ GF1/GF2 双过 → 同实例 125+ 请求零崩零 assert。
+- G4 门（同 prompt 二连发）四档抽查全过（GF2 / RG1+2 / RS1+2 / RM1+2）。
+- W spec/set_sampler CPU sampler 回退 = SPLIT_MODE_TENSOR 系统行为，良性，基线已含开销（CVG 环境假说已证伪撤回）。
+- 证据：D:\p0_evidence（36 文件+llama_dll_2335_22build.dll）；D:\r26bin_keep（94 文件）；srv_fresh/srv_greed/srv_save/srv_moe.log。
+
+### 新增认账 84-100
+84=PS 执行策略；85=先取证后重启+换日志名；86=G4 二连发探针；87=批量协议形状审计；88=一窗一标一命令；89=WER offset+PE 时间戳废；90=形状组活性闭环；91=二进制身份=DLL 链+行为学指纹；92=源码回退≠二进制回退；93=DLL 链开局必查；94=env 验证按前缀；95=每轮末尾累积摘要必附；96=挂机协议唯一化；97=生成式 soak 确定负载；98=1-tok 早停 EOS 行为学；99=采集包模式完备性；100=tensor 模式 CPU sampler=模式级系统行为，归因先查模式约束再查环境。
+
+### 挂账
+#29466 补充评论（保守措辞已备）；issue #23322 长会话观察项（hybrid 长上下文 MTP acceptance 或降）；AP 非确定性观察；L1-L6 位级电池待 PSReadLine 考古；nsys 普查与 P16 回归待启动。
