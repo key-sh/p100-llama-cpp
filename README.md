@@ -281,6 +281,23 @@ Usage: `set GGML_CUDA_GRAPH_FORCE=1` per window or `setx GGML_CUDA_GRAPH_FORCE 1
 
 **`--batch-size` / `--ubatch-size`, briefly.** `ubatch` is the physical micro-batch the prefill kernels compute per launch; activation VRAM grows linearly with it (at 4096 with a 262k context reserved, this box sits at ~14 of 16 GB per card). `batch` is the logical queue depth the scheduler may accumulate across slots — near-free in VRAM, must be >= ubatch; 2-4x ubatch is a normal choice. Neither moves token generation: decode pushes at most `--parallel` tokens per step through the GPU whatever the ubatch is set to (27B measured identical at ubatch 2048 and 4096). They matter only for prefill of prompts longer than one ubatch, where a larger ubatch cuts per-ubatch AllReduce round trips — with diminishing returns on this already cuBLAS-heavy path, and a real VRAM bill.
 
+### Addendum (key-sh, 2026-10, post-v8.3): calibrated operating points, dual-slot stability, a Qwen3 sampling note
+
+After the decode-slot-pool experiment was reverted outright and a pool-free binary rebuilt, the whole stack was recalibrated with a fixed probe suite: one summarize fixture per profile, each profile's sampler chain held constant, the server always run with `GGML_CUDA_GRAPH_FORCE=1`. Current operating points on this box (4x P100, `-sm tensor -ts 16,16,16,16`, 262k ctx, f16 KV, `-fa on`; unit tok/s):
+
+| profile | model | tg |
+|---|---|---|
+| creative | qwen3.8-27B-UD-Q8_K_XL | **36.75** — temp 0.8 probe chain; the full user sampler stack (top-k/top-p/min-p, repetition/presence penalties, DRY, over a ~248k vocab) lands ~33-34 |
+| greedy | qwen3.8-27B-MTP-Q8_0 (MTP on, draft depth 3) | **44.75** — temp 0 |
+| power-saving | qwen3.8-27B-MTP-Q8_0 (MTP on, draft depth 3) | **41.94** |
+| MoE | qwen3.6-35B-A3B-UD-Q6_K_XL | **84.66** |
+
+The operating-point caveat from earlier in this section applies unchanged: these are probe absolutes for orientation, not a paired A/B against the older numbers above.
+
+Dual-slot stability: `--parallel 2` with one slot per application (SillyTavern plus a second API client) was validated under *real* concurrent load — two clients fired simultaneously, then in alternating order, with shared-prefix cache reuse across slots — for a full run with **zero crashes and zero asserts**, per-slot speed unchanged against the single-slot baseline (36.8 tok/s observed). The mixed-uid, alternating graph-sequence shape that deterministically crashed the earlier decode-slot-pool build ([#29466](https://github.com/ggml-org/llama.cpp/issues/29466)) is clean on this binary. (The slot log's `graphs reused` counter advanced by the thousands during that run — that is the llama-side compute-graph reuse counter, ~1 per token, not a cudaGraphLaunch count; see the correction earlier in this section.)
+
+A Qwen3 sampling note for anyone serving these models with `--jinja`: thinking is **on by default** and thinking tokens count toward `max_tokens`. A 512-token budget on a thinking-prone prompt comes back with empty `content`, `finish_reason=length`, and the whole budget spent inside `reasoning_content`. To spend the budget on visible output, pass `"chat_template_kwargs":{"enable_thinking":false}` in the request body — or size `max_tokens` for thinking (~500-2000 tokens) plus the answer.
+
 ### Also on this branch: AllReduce P2P staging (off by default)
 
 

@@ -698,3 +698,11 @@ A3B ubatch 1024/batch 4096 可试 2048；关服 taskkill /f /im；正确性抽�
 
 ### 挂账
 #29466 补充评论（保守措辞已备）；issue #23322 长会话观察项（hybrid 长上下文 MTP acceptance 或降）；AP 非确定性观察；L1-L6 位级电池待 PSReadLine 考古；nsys 普查与 P16 回归待启动。
+
+## v8.3.1 补档（P2 门 + 认账112~115 + 生产指引）[R33]
+- P2 门（parallel 2 双槽实并发稳定性）：PASS。判据全过：零 GGML_ASSERT/error/failed/crash；Start-Job 双客户端实并发 BOTH DONE；#29466 崩溃形状全踩（双槽交替 uid + LCP cache 复用 f_sim=1.000/f_keep=0.120 + graphs reused=1623）零崩；并发下单槽 tg=36.84 t/s 与单槽基线一致。结论：parallel 2 双槽（ST+skill 双应用）可上生产。档案=srv_p2gate.log。
+- 夹具判读：A 空 content=thinking 吞尽 512 max_tokens（C1 reasoning=1831/finish=length；C2 enable_thinking=false 后 content=2463 非空）→ 服务器零缺陷。
+- 生产指引：ST/skill 请求加 "chat_template_kwargs":{"enable_thinking":false} 或 max_tokens≥4096（thinking 常耗 500~2000 token 且计入预算）；bat 的 --no-mmap 下次更新换 --load-mode mmap；27B 生产 bat 维持 parallel 2（每槽 ctx=131072 已知悉）。
+- 生产 bat 审计（R26）：与最新补丁对齐无需改；OMP_NUM_THREADS/OMP_WAIT_POLICY=no-op；A3B --rope-scale 1.0=no-op；A3B ubatch 4096 实测可行保留。
+- 认账：112=命令参数存在性校验；113=PS 方法参数不可嵌管道；114=响应三字段完整性（finish/content/reasoning）；115=thinking token 计入 max_tokens。
+- 挂账：#29466 评论（草稿 R29，贴后勾销）；X1 p-min 情报挖掘=新窗口开局；README v8.3 节。

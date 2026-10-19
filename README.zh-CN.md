@@ -279,6 +279,23 @@ server 比值*优于* cli 比值，原因还是那笔宿主税换了顶帽子：
 
 **`--batch-size` / `--ubatch-size` 简说。**`ubatch` 是 prefill 内核每次启动实际计算的物理微批；激活显存随它线性增长（本机在 4096、预留 262k 上下文时每卡约 14/16 GB）。`batch` 是调度器跨 slot 可累计的逻辑排队深度——显存代价近乎为零，但必须 ≥ ubatch；取 2-4 倍 ubatch 是常规选择。两者都**不**影响 token 生成：解码时每步最多 `--parallel` 个 token 过 GPU，与 ubatch 设多少无关（27B 在 ubatch 2048 与 4096 下实测相同）。它们只在 prefill 超过一个 ubatch 的长提示词上起作用——更大的 ubatch 减少每批的 AllReduce 往返轮数——但在本就跑 cuBLAS 的路径上收益递减，且显存账单是真实的。
 
+### 补遗（key-sh，2026-10，v8.3 战役后）：校准操作点、双槽稳定性、一条 Qwen3 采样注意
+
+decode 槽池实验整体回退、重建出不含槽池代码的干净二进制之后，整套栈用固定探针套件重新校准：每档位一个 summarize 夹具、各档采样链全程固定、server 一律带 `GGML_CUDA_GRAPH_FORCE=1`。本机当前操作点（4x P100、`-sm tensor -ts 16,16,16,16`、262k ctx、f16 KV、`-fa on`；单位 tok/s）：
+
+| 档位 | 模型 | tg |
+|---|---|---|
+| 文学创作 | qwen3.8-27B-UD-Q8_K_XL | **36.75**——temp 0.8 探针链；完整用户采样栈（~248k 词表上 top-k/top-p/min-p、重复/出现惩罚、DRY）落在 ~33-34 |
+| 贪心 | qwen3.8-27B-MTP-Q8_0（MTP 开，草稿深度 3） | **44.75**——temp 0 |
+| 省电 | qwen3.8-27B-MTP-Q8_0（MTP 开，草稿深度 3） | **41.94** |
+| MoE | qwen3.6-35B-A3B-UD-Q6_K_XL | **84.66** |
+
+本节前文"绝对值随操作点浮动"的告诫原样适用：这些是探针绝对值，供定位参考，并非与上文旧数字的成对 A/B。
+
+双槽稳定性：`--parallel 2` 每槽一个应用（SillyTavern 加第二个 API 客户端）在**真实并发**负载下验证——两客户端同时发起请求，再按交替顺序连发，槽间复用共享前缀 cache——整轮**零崩溃零断言**，单槽速度与单槽基线一致（实测 36.8 tok/s）。曾让早期 decode 槽池构建确定性崩溃的混合 uid、交替图序列形状（[#29466](https://github.com/ggml-org/llama.cpp/issues/29466)）在这棵干净二进制上没有复现。（该轮 slot 日志的 `graphs reused` 计数推进了数千次——那是 llama 侧计算图复用计数、约每 token +1，不是 cudaGraphLaunch 计数；见本节前文勘误。）
+
+一条给用 `--jinja` 部署这些模型的 Qwen3 采样注意：thinking **默认开启**，且思考 token 计入 `max_tokens`。512 token 预算遇上易触发思考的提示词，返回空 `content`、`finish_reason=length`、预算全部花在 `reasoning_content` 里。想让预算花在正文上：请求体传 `"chat_template_kwargs":{"enable_thinking":false}`，或把 `max_tokens` 按"思考（约 500-2000 token）+ 正文"放大。
+
 ### 同时随本分支入库：AllReduce P2P staging（默认关闭）
 
 提交 `32b9763`（allreduce.cu，+63/−2）为内部 AllReduce 增加了点对点 staging 变体，`GGML_CUDA_AR_P2P`（自提交 `6fb569d` 起默认**关**）：初始化时对每一对设备探测 `cudaDeviceCanAccessPeer`，接受的对启用 peer access，任何一对被拒绝则**整体**回退到既有的 copy staging。设 `GGML_CUDA_AR_P2P=1` 可显式启用。
