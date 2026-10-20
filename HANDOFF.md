@@ -877,3 +877,31 @@ G1 ee213b33 / G2′ 373ec40b / G3a 47aeb7a7 / G3b 8772366b。md5 shape-effect �
 2. 闭账：#29466 补充评论（R29 草稿备）；--ctx-checkpoints 在位性检查；A2/dequant 定谳视 P16 战后余力。
 
 <!-- ===== HANDOFF.md v8.5 增补段结束 ===== -->
+
+<!-- ===== HANDOFF.md v8.5.1 增补段（追加于 v8.5 之后；前文未动，只增不删）===== -->
+
+## 【v8.5.1】10A. llama-server.exe 顶替事故档案（2026-10-20；恢复闭案）
+
+### 10A.1 事故与结案
+- 现象：llama-server.exe 被原地覆盖为 136B 文本文件（内容=cmd 报错报文 "'D:\...\Release' is not recognized..."；md5=48753F02A891860E345810C4E25A0B3F，证据存 D:\temp），同簇 0 字节 cls 文件（10:10:39/44，CWD=Release）；--help 运行弹"不支持的16位应用程序"=Windows 对非 PE 文件通用文案。
+- 成因：cmd 会话中某行**相对路径重定向**砸中当前目录下的 exe；cmd 无持久历史（PSReadLine 只记 PS）→ 具体行不可追溯；非本档任何交付命令包（交付重定向一律绝对 D:\temp）。
+- 损害面：仅 exe 一件。DLL 四件身份链原封：llama.dll 2562560/10-18 19:08:13（P0）、ggml-cuda.dll 44670976/10-17 0:42:33、ggml-base.dll 656896/10-17 17:45:06、llama-server-impl.dll 13082624/10-17 17:45:27；git 未跟踪该文件、仓库零污染（v8.5=0f4d476 照常有效）。
+- 恢复：**先删后链**（PS Remove-Item -Force → cmake --build --target llama-server）→ exe 再生 10,752B（与 llama-cli 同族薄前端壳；server 逻辑在 llama-server-impl.dll）。
+- 复验三门全过：①RCg md5=**81c353a5**（golden 锚逐位一致，prompt_n=35 合时代）；②RCa/RCb=**44.78/44.78** 落带 [43.8,45.6] 且 pred_ms 差 1ms——v8.4 锚精确复现，vintage 顾虑退役、无需重锚；③生命周期干净。RCb prompt_n=4/pp=12.6=模型 B 4-token 缓存续写签名复现（N16 互证）。
+- 判定：**事故闭案。工作身份=重链件（2026-10-20 11:12:05）；全部既有锚点继续有效；测速/锚点解冻。**
+
+### 10A.2 认账增补（接 122）
+- 123 "不支持的 16 位应用程序"弹窗=Windows 对非 PE/无法解析格式文件的通用文案（该文件连 MZ 头都没有）；处置序=forensics→恢复→行为学复验，不轻信弹窗文案字面。
+- 124 cmd 无持久历史→事故行不可追溯；硬化规则：重定向一律绝对路径命名文件；禁止 CWD=bin 目录内粘贴带 > 的探索性/多行块；粘贴前目检。
+- 125 **MSBuild 增量检查可被污染 mtime 短路**：输出 mtime 新于全部输入→"最新→跳过链接"而箭头行照打——**箭头行≠写入**（本役两发自然实验复现）；恢复污染产物必须先删再链。
+- 126 **跨 shell 交付**：cmd 语法包（cd /d、>nul、del /f /q）贴入 PS 逐条无害失败（PS：>nul=写名为 nul 的文件；del /f /q=参数绑定错；$ 双引号插值吞内层变量）；交付包头部必须标注目标窗口+命令尽量绝对路径无 cd 依赖+跨语法给等价双包。
+- 127 恢复实操确认：用户活动窗口=PS → 涉删文件交付包默认 PS 主语法（Remove-Item -Force）。
+- 128 --version 版本串（build 19/9b068cc）=源码树烙印，非二进制身份判据；身份=DLL 链+行为学指纹（91/92 再确认）。
+- 129 --load-mode 帮助行缺席（findstr 空命中）但 DEPRECATED 警告文本实证 parser 已知该旗标→**帮助显示与旗标存在性解耦**；存在性终裁=直接旗标探针（--load-mode none --version）；N65 迁移指引不变（现阶段 --no-mmap，未来构建迁移 --load-mode none 并以装载时长实测验收）。
+
+### 10A.3 纪律增量
+- 二进制身份存疑期间测速/锚点活动冻结，恢复+复验过带后再解冻（本役实践）。
+- 事故处置三件套=forensics（字节级+collateral sweep+DLL 身份链+git 状态+备份狩猎）→ 恢复（先删后链）→ 行为学门（golden md5+速度带+生命周期）。
+
+<!-- ===== HANDOFF.md v8.5.1 增补段结束 ===== -->
+
