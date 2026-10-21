@@ -1256,9 +1256,6 @@ static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct gg
         return false;
     }
     auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
-    for (size_t i = 0; i < comm_ctx->dev_ids.size(); ++i) { // GP100-P16: notify the residual folding registry
-        ggml_cuda_ar_residual_notify(comm_ctx->dev_ids[i], tensors[i]->data, ggml_nelements(tensors[i]));
-    }
     return comm_ctx->try_allreduce(comm_ctx, tensors);
 }
 
@@ -3568,81 +3565,6 @@ static bool ggml_cuda_gp100_gnorm(ggml_backend_cuda_context * cuda_ctx, const gg
     return true;
 }
 
-// GP100-P16: residual-add folding matcher.  True if node i is the F32 ADD that
-// consumes an AllReduce output (the callback's pending slot) plus a residual;
-// binds {ar_out -> (add_dst, residual)} for the replay-time fused ar_kernel and
-// skips the node.  Every failing condition degrades to the native path.
-static bool ggml_cuda_gp100_skip_ar_residual(ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph, int i, bool capturing) {
-    static const bool disabled = []() { const char * e = getenv("GGML_CUDA_GP100_ATTN_DISABLE"); return e != nullptr && e[0] != '0'; }();
-    if (!capturing || disabled || ggml_cuda_info().devices[cuda_ctx->device].cc != GGML_CUDA_CC_PASCAL) {
-        return false;
-    }
-    const ggml_tensor * add = cgraph->nodes[i];
-    if (add->op != GGML_OP_ADD || add->type != GGML_TYPE_F32 || (add->flags & GGML_TENSOR_FLAG_OUTPUT) ||
-            !ggml_is_contiguous(add) || add->data == nullptr || ggml_node_get_use_count(cgraph, i) != 1) {
-        return false;
-    }
-    const ggml_tensor * ar_out = add->src[0];
-    const ggml_tensor * res    = add->src[1];
-    if (ar_out->type != GGML_TYPE_F32 || !ggml_is_contiguous(ar_out) || ar_out->data == nullptr ||
-            res->type != GGML_TYPE_F32 || !ggml_is_contiguous(res) || res->data == nullptr ||
-            !ggml_are_same_shape(ar_out, add) || !ggml_are_same_shape(res, add)) {
-        return false;
-    }
-    const int64_t ne = ggml_nelements(add);
-    if (!ggml_cuda_ar_residual_pending_take(cuda_ctx->device, ar_out->data, ne)) {
-        const ggml_tensor * tmp = ar_out; ar_out = res; res = tmp; // either operand order carries the AR output
-        if (!ggml_cuda_ar_residual_pending_take(cuda_ctx->device, ar_out->data, ne)) {
-            return false;
-        }
-    }
-    ggml_cuda_ar_residual_bind(cuda_ctx->device, ar_out->data, (float *) add->data, (const float *) res->data, ne);
-    return true;
-}
-
-// GP100-P16: activation-cache key matcher.  If node i is a flash-attn node whose
-// output reaches exactly one MUL_MAT's src1 through value-preserving reinterprets
-// (reshape/view, at most one cont copy), stash that consumer tensor so the fattn
-// host path binds the GP100 activation cache (gnorm key mechanism, forward walk).
-static bool ggml_cuda_gp100_act_cache_annotate(ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph, int i, bool capturing) {
-    ggml_cuda_gp100_act_key_set(nullptr); // clear any stale key first
-    static const bool disabled = []() { const char * e = getenv("GGML_CUDA_GP100_ATTN_DISABLE"); return e != nullptr && e[0] != '0'; }();
-    if (!capturing || disabled || ggml_cuda_info().devices[cuda_ctx->device].cc != GGML_CUDA_CC_PASCAL) {
-        return false;
-    }
-    const ggml_tensor * fa = cgraph->nodes[i];
-    if (fa->op != GGML_OP_FLASH_ATTN_EXT || fa->src[0]->ne[1] != 1) { // combine flat order matches decode shapes only
-        return false;
-    }
-    const ggml_tensor * cur = fa;
-    bool used_cont = false;
-    for (int j = i + 1; j < std::min(cgraph->n_nodes, i + 16); ++j) {
-        const ggml_tensor * n = cgraph->nodes[j];
-        if (ggml_cuda_is_view_or_noop(n)) {
-            continue;
-        }
-        if (n->op == GGML_OP_MUL_MAT && n->src[1] == cur && ggml_node_get_use_count(cgraph, j) == 1) {
-            ggml_cuda_gp100_act_key_set(cur);
-            return true;
-        }
-        const bool pure_reinterp = (n->src[0] == cur) && ggml_is_contiguous(n) &&
-            ggml_nelements(n) == ggml_nelements(cur) && ggml_node_get_use_count(cgraph, j) == 1 &&
-            (n->op == GGML_OP_RESHAPE || (n->op == GGML_OP_VIEW && n->view_src == cur));
-        if (pure_reinterp) {
-            cur = n;
-            continue;
-        }
-        if (!used_cont && n->op == GGML_OP_CONT && n->src[0] == cur &&
-                ggml_nelements(n) == ggml_nelements(cur) && ggml_node_get_use_count(cgraph, j) == 1) {
-            cur = n;
-            used_cont = true;
-            continue;
-        }
-        return false;
-    }
-    return false;
-}
-
 // true if node i is an l2_norm that a matched GP100 gated_delta_net applies itself
 static bool ggml_cuda_gp100_skip_gdn_l2(const ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph, int i) {
     const ggml_tensor * n = cgraph->nodes[i];
@@ -4636,7 +4558,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
-            ggml_cuda_ar_residual_begin_capture(cuda_ctx->device, cgraph); // GP100-P16: generation guard (new graph = reset)
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (is_concurrent_event_active) {
@@ -4679,8 +4600,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                if (ggml_cuda_gp100_skip_ar_residual(cuda_ctx, cgraph, i, cuda_graph_update_required) || // GP100-P16
-                    ggml_cuda_gp100_skip_state_gather(cuda_ctx, cgraph, i) ||
+                if (ggml_cuda_gp100_skip_state_gather(cuda_ctx, cgraph, i) ||
                     ggml_cuda_gp100_skip_conv_plumbing(cuda_ctx, cgraph, i) ||
                     ggml_cuda_gp100_skip_gdn_l2(cuda_ctx, cgraph, i) ||
                     ggml_cuda_gp100_skip_gdn_beta(cuda_ctx, cgraph, i) ||
@@ -4726,8 +4646,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
 #else
                 GGML_UNUSED(integrated);
-
-                ggml_cuda_gp100_act_cache_annotate(cuda_ctx, cgraph, i, cuda_graph_update_required); // GP100-P16: stash FA cache key
 #endif  // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
@@ -4769,7 +4687,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
         if (cuda_graph_update_required) { // Update graph executable
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
-            ggml_cuda_ar_residual_fixup(cuda_ctx->device, cuda_ctx->stream()); // GP100-P16: first-eval fixup (skipped ADDs)
         }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));

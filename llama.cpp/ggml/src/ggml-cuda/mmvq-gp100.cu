@@ -1334,37 +1334,6 @@ static bool gp100_cache_enabled() {
     return !no_cache;
 }
 
-// GP100-P16: flash-attn -> out-proj activation-cache folding.  During graph
-// capture the fattn host path takes the stashed key (the consuming matmul's
-// src1) and binds the cache to it; the combine kernel then fills y/ys/s16
-// directly and the consuming matmul hits the cache instead of running its own
-// prep_act.  Capture-pass only; on replays the graph runs combine -> matmul
-// with no host involvement (gnorm lifecycle precedent).
-static const ggml_tensor * gp100_fattn_key = nullptr;
-
-void ggml_cuda_gp100_act_key_set(const ggml_tensor * key) {
-    gp100_fattn_key = key;
-}
-
-const ggml_tensor * ggml_cuda_gp100_act_key_take() {
-    const ggml_tensor * k = gp100_fattn_key;
-    gp100_fattn_key = nullptr;
-    return k;
-}
-
-void ggml_cuda_gp100_act_cache_begin(ggml_backend_cuda_context & ctx, const ggml_tensor * key, const int64_t ne,
-                                     half ** y_out, float2 ** ys_out, float ** s16_out) {
-    *y_out = nullptr; *ys_out = nullptr; *s16_out = nullptr;
-    if (key == nullptr || key->data == nullptr || !gp100_cache_enabled() || ne > GP100_ACT_CACHE_MAX_K) {
-        return;
-    }
-    gp100_act_cache & c = gp100_cache(ctx);
-    c.src1 = key; c.data = key->data; c.K = ne; c.ncols = 1; c.epoch = ctx.graph_epoch;
-    *y_out   = (half   *) c.buf;
-    *ys_out  = (float2 *) (c.buf + GP100_OFF_YS);
-    *s16_out = (float  *) (c.buf + GP100_OFF_S16);
-}
-
 void ggml_cuda_gp100_mmvq(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
                           const ggml_cuda_mm_fusion_args_host * fusion) {
     cudaStream_t stream = ctx.stream();
