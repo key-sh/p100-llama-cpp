@@ -123,6 +123,7 @@ cmake --build D:\p100-llama-cpp\llama.cpp\build --config Release --parallel 36
 8. **树态改变后侦察命令换形式**（认账 148）：新 commit 后用 git show <hash> 而非 git diff。
 9. **计数器铁律**：任何 acceptance/graphs-reused 计数器≠证据，判决只认速度成对差+MD5/KLD。
 10. **D:\temp 易失**：迁移期所有探针产物即时另存（mig_*.md/logs）。
+11. **本仓库根≠上游根**：qr0n 式补丁（路径相对上游根，如 ggml/src/...）必须从仓库根以 git apply/am --directory=llama.cpp 应用；从 llama.cpp 子目录 cwd 调用=静默跳过（Skipped patch，假 rc=0）。rc=0≠已应用，一律 -v + 前后文件哈希双验（HANDOFF 认账 157/158/160）。
 
 ## 7. 收官落账
 
