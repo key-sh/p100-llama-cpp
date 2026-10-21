@@ -3,6 +3,7 @@
 #include "common.cuh"
 #include "convert.cuh"
 #include "vecdotq.cuh"
+#include "mmvq-gp100.cuh" // GP100-P16
 
 #include <cstdint>
 
@@ -917,7 +918,10 @@ static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
         const float2 * VKQ_meta_ptr,
         float * dst_ptr,
-        const int parallel_blocks) {
+        const int parallel_blocks,
+        half *   cache_y   = nullptr, // GP100-P16: activation cache fill (null = off)
+        float2 * cache_ys  = nullptr,
+        float  * cache_s16 = nullptr) {
     ggml_cuda_pdl_lc();
     const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
     const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
@@ -967,6 +971,35 @@ static __global__ void flash_attn_combine_results(
     }
 
     dst[tid] = VKQ_numerator / VKQ_denominator;
+
+    if constexpr (D % 32 == 0) { // GP100-P16: fill the activation cache; each warp owns one 32-elem block, prep_act math verbatim
+        if (cache_y) {
+            const float v = dst[tid];
+            const int b  = j_dst_unrolled*(D/32) + tid/32;
+            const int l  = tid % 32;
+            float a = fabsf(v);
+            float s = v;
+            #pragma unroll
+            for (int o = 1; o < 16; o <<= 1) {
+                a = fmaxf(a, __shfl_xor_sync(0xFFFFFFFF, a, o));
+                s += __shfl_xor_sync(0xFFFFFFFF, s, o);
+            }
+            if (l % 16 == 0) {
+                cache_s16[2*b + l/16] = s;
+            }
+            a = fmaxf(a, __shfl_xor_sync(0xFFFFFFFF, a, 16));
+            s += __shfl_xor_sync(0xFFFFFFFF, s, 16);
+            int e = 0;
+            if (a > 0.0f) {
+                frexpf(a, &e);
+            }
+            const int k = 15 - e;
+            cache_y[b*32 + l] = __float2half_rn(ldexpf(v, k));
+            if (l == 0) {
+                cache_ys[b] = make_float2(ldexpf(1.0f, 24 - k), s);
+            }
+        }
+    }
 }
 
 template <int DV, int ncols1, int ncols2>
@@ -975,6 +1008,7 @@ void launch_fattn(
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
 ) {
     constexpr int ncols = ncols1 * ncols2;
+    const ggml_tensor * gp100_act_key = ggml_cuda_gp100_act_key_take(); // GP100-P16 (null unless annotated)
 
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -1266,9 +1300,15 @@ void launch_fattn(
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
+        half * gp100_cy = nullptr; float2 * gp100_cys = nullptr; float * gp100_cs16 = nullptr; // GP100-P16
+        if (gp100_act_key) {
+            ggml_cuda_gp100_act_cache_begin(ctx, gp100_act_key, ggml_nelements(KQV), &gp100_cy, &gp100_cys, &gp100_cs16);
+        }
+
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
         ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
-            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks,
+            gp100_cy, gp100_cys, gp100_cs16);
     }
     CUDA_CHECK(cudaGetLastError());
 }

@@ -122,6 +122,98 @@ struct ggml_cuda_ar_kernel_peers {
     int     * arrival[GGML_CUDA_MAX_DEVICES];
 };
 
+// GP100-P16: residual-add folding state.  notify() is called from the AllReduce
+// callback (pending push on capture, no-op on replay when a bound entry exists);
+// the capture loop binds pending slots to the residual ADD's operands and skips
+// that ADD; the chunked launch looks bound entries up and emits the fused
+// ar_kernel variant; a post-capture fixup fills the outputs of the capture-pass
+// launch.  Single-threaded domain (capture loop + sched-driven callback).
+struct ggml_cuda_ar_residual_state {
+    struct pend  { const void * ar_out; int64_t ne; };
+    struct entry { const void * ar_out; float * add_dst; const float * residual; int64_t ne; };
+    pend         pending[128];
+    int          n_pending = 0;
+    entry        reg[128];
+    int          n_reg     = 0;
+    const void * last_cgraph = nullptr; // capture generation identity
+};
+static ggml_cuda_ar_residual_state ggml_cuda_ar_res_st[GGML_CUDA_MAX_DEVICES];
+
+void ggml_cuda_ar_residual_notify(int dev, const void * ar_out, int64_t ne) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    for (int i = 0; i < st.n_reg; ++i) {
+        if (st.reg[i].ar_out == ar_out) {
+            return; // replay: the fused launch consumes this entry
+        }
+    }
+    if (st.n_pending < 128) {
+        st.pending[st.n_pending++] = { ar_out, ne };
+    }
+}
+
+bool ggml_cuda_ar_residual_pending_take(int dev, const void * ar_out, int64_t ne) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    for (int i = 0; i < st.n_pending; ++i) {
+        if (st.pending[i].ar_out == ar_out && st.pending[i].ne == ne) {
+            st.pending[i] = st.pending[--st.n_pending];
+            return true;
+        }
+    }
+    return false;
+}
+
+void ggml_cuda_ar_residual_bind(int dev, const void * ar_out, float * add_dst, const float * residual, int64_t ne) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    for (int i = 0; i < st.n_reg; ++i) { // same graph re-capture: refresh, do not duplicate
+        if (st.reg[i].ar_out == ar_out) {
+            st.reg[i] = { ar_out, add_dst, residual, ne };
+            return;
+        }
+    }
+    if (st.n_reg < 128) {
+        st.reg[st.n_reg++] = { ar_out, add_dst, residual, ne };
+    }
+}
+
+bool ggml_cuda_ar_residual_lookup(int dev, const void * ar_out, float ** add_dst, const float ** residual, int64_t * ne) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    for (int i = 0; i < st.n_reg; ++i) {
+        if (st.reg[i].ar_out == ar_out) {
+            *add_dst  = st.reg[i].add_dst;
+            *residual = st.reg[i].residual;
+            *ne       = st.reg[i].ne;
+            return true;
+        }
+    }
+    return false;
+}
+
+void ggml_cuda_ar_residual_begin_capture(int dev, const void * cgraph) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    if (st.last_cgraph != cgraph) { // same graph re-capture keeps state; a new graph resets it
+        st = ggml_cuda_ar_residual_state{};
+        st.last_cgraph = cgraph;
+    }
+}
+
+static __global__ void ggml_cuda_ar_residual_fixup_kernel(const float * ar_out, float * add_dst, const float * residual, int64_t ne) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < ne) {
+        add_dst[i] = ar_out[i] + residual[i]; // GP100-P16: same fp32 add, same operand order as the graph ADD
+    }
+}
+
+void ggml_cuda_ar_residual_fixup(int dev, cudaStream_t stream) {
+    ggml_cuda_ar_residual_state & st = ggml_cuda_ar_res_st[dev];
+    for (int i = 0; i < st.n_reg; ++i) {
+        const int64_t n = st.reg[i].ne;
+        ggml_cuda_ar_residual_fixup_kernel<<<(int) ((n + 255) / 256), 256, 0, stream>>>(
+            (const float *) st.reg[i].ar_out, st.reg[i].add_dst, st.reg[i].residual, n);
+    }
+    st.n_pending = 0; // reg stays: replay-time callbacks consume entries for fused launches
+    CUDA_CHECK(cudaGetLastError());
+}
+
 // N_FIXED > 0 compiles the device count in (the rank loops then unroll); 0
 // reads it from n_devices.  Two GPUs get their own instantiation because this
 // kernel sits on the token-generation path, where the runtime loop cost ~0.5%.
@@ -133,7 +225,9 @@ static __global__ void ggml_cuda_ar_kernel(
         const int                       n_devices_rt,
         int                             rank,
         int                             count,
-        int                             token) {
+        int                             token,
+        float *                         add_dst   = nullptr, // GP100-P16: fold the residual ADD (null = off)
+        const float *                   residual  = nullptr) {
     const int n_devices = N_FIXED > 0 ? N_FIXED : n_devices_rt;
 
     // Vector unit for the wire type, sized to the arch's widest single-instruction
@@ -235,6 +329,12 @@ static __global__ void ggml_cuda_ar_kernel(
             for (int k = 0; k < ELEMS_PER_VEC; ++k) {
                 recvbuf[off + k] = ggml_cuda_cast<T_dst>(sum[k]);
             }
+            if (add_dst) { // GP100-P16: fold the residual ADD (fp32, same operand order as the graph ADD)
+                #pragma unroll
+                for (int k = 0; k < ELEMS_PER_VEC; ++k) {
+                    add_dst[off + k] = sum[k] + residual[off + k];
+                }
+            }
         }
         if (bid == 0 && tid < count - tail) {
             float sum = 0.0f;
@@ -245,6 +345,9 @@ static __global__ void ggml_cuda_ar_kernel(
                 sum = r == 0 ? v : sum + v;
             }
             recvbuf[tail + tid] = ggml_cuda_cast<T_dst>(sum);
+            if (add_dst) { // GP100-P16
+                add_dst[tail + tid] = sum + residual[tail + tid];
+            }
         }
     }
 }
@@ -1088,6 +1191,13 @@ bool ggml_cuda_ar_allreduce(
 
                 char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
 
+                // GP100-P16: replay-time fused residual add (bit-identical to the skipped graph ADD)
+                float *       fuse_dst = nullptr;
+                const float * fuse_res = nullptr;
+                int64_t       fuse_ne  = 0;
+                const bool fuse_add = ggml_cuda_ar_residual_lookup(p->devices[i], tensors[i]->data, &fuse_dst, &fuse_res, &fuse_ne) &&
+                    fuse_ne == (int64_t) ne;
+
                 // Match NCCL/meta-backend semantics: inactive shards contribute
                 // zeros.  On the BF16 path the F32 tensor data was already
                 // zeroed up-front (above), so per-chunk zeroing isn't needed.
@@ -1101,7 +1211,9 @@ bool ggml_cuda_ar_allreduce(
                     reinterpret_cast<T_dst *>(data), \
                     peers, n, i, \
                     static_cast<int>(chunk_elems), \
-                    token)
+                    token, \
+                    fuse_add ? (fuse_dst + chunk_start) : nullptr, \
+                    fuse_add ? (fuse_res + chunk_start) : nullptr)
 #define LAUNCH_AR_KERNEL(T_dst, T_wire) \
                 if (n == 2) { LAUNCH_AR_KERNEL_N(T_dst, T_wire, 2); } else { LAUNCH_AR_KERNEL_N(T_dst, T_wire, 0); }
 

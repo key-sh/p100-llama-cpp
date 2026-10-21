@@ -25,3 +25,9 @@ void ggml_cuda_gp100_gated_norm(ggml_backend_cuda_context & ctx, const ggml_tens
 static inline bool ggml_cuda_gp100_mmvq_fusable_type(const ggml_type type) {
     return type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K;
 }
+
+// GP100-P16: flash-attn combine -> activation cache folding (see mmvq-gp100.cu).
+void ggml_cuda_gp100_act_key_set(const ggml_tensor * key);
+const ggml_tensor * ggml_cuda_gp100_act_key_take();
+void ggml_cuda_gp100_act_cache_begin(ggml_backend_cuda_context & ctx, const ggml_tensor * key, int64_t ne,
+                                     half ** y_out, float2 ** ys_out, float ** s16_out);

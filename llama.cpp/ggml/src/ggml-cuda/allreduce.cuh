@@ -27,3 +27,15 @@ bool ggml_cuda_ar_allreduce(
     ggml_backend_t        * backends,
     ggml_tensor           ** tensors);
 
+// GP100-P16: residual-add folding.  The AllReduce callback notifies the shard
+// output; the graph-capture loop binds it to the residual ADD's operands and
+// skips that ADD; on replays the chunked path launches the fused ar_kernel
+// variant, and a post-capture fixup fills the outputs of the capture-pass
+// launch.  See allreduce.cu.
+void ggml_cuda_ar_residual_notify(int dev, const void * ar_out, int64_t ne);
+bool ggml_cuda_ar_residual_pending_take(int dev, const void * ar_out, int64_t ne);
+void ggml_cuda_ar_residual_bind(int dev, const void * ar_out, float * add_dst, const float * residual, int64_t ne);
+bool ggml_cuda_ar_residual_lookup(int dev, const void * ar_out, float ** add_dst, const float ** residual, int64_t * ne);
+void ggml_cuda_ar_residual_begin_capture(int dev, const void * cgraph);
+void ggml_cuda_ar_residual_fixup(int dev, cudaStream_t stream);
+
