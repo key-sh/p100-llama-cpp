@@ -1,0 +1,19 @@
+--- ggml-backend-meta.cpp L2005-2022 (assert context) ---
+2005:         size_t n_subgraphs  = 0;
+2006:         size_t max_tmp_size = 0;
+2007: 
+2008:         for (size_t j = 0; j < n_backends; j++) {
+2009:             auto & bcj = backend_ctx->backend_configs[j];
+2010: 
+2011:             for (int i = 0; i < cgraph->n_nodes; i++) {
+2012:                 ggml_tensor * node = cgraph->nodes[i];
+2013:                 if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(node->view_src->buffer)) {
+2014:                     // FIXME s_copy_main is on the CPU and its view seems to be incorrectly added to the graph nodes.
+2015:                     // For regular usage this doesn't matter since it's a noop but trying to call ggml_backend_meta_buffer_simple_tensor results in a crash.
+2016:                     bcj.nodes[i] = node;
+2017:                     continue;
+2018:                 }
+2019:                 bcj.nodes[i] = ggml_backend_meta_buffer_simple_tensor(node, j);
+2020:                 GGML_ASSERT(bcj.nodes[i]);
+2021:             }
+2022:         }

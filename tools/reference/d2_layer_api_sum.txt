@@ -1,0 +1,41 @@
+Generating SQLite file D:\temp\d2_layer1.sqlite from D:\temp\d2_layer1.nsys-rep
+Processing [D:\temp\d2_layer1.sqlite] with [D:\Program Files\NVIDIA Corporation\Nsight Systems 2026.5.1\target-windows-x64\reports\cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)   Med (ns)   Min (ns)  Max (ns)   StdDev (ns)             Name           
+ --------  ---------------  ---------  ----------  ---------  --------  ---------  -----------  --------------------------
+     46.4       2164444424       3977    544240.5     2412.0       908  148626890    4392965.0  cudaStreamSynchronize     
+     20.1        935261254         27  34639305.7  1967594.0     15950  443823228   89952166.1  cudaMallocHost            
+      8.0        375106079      28189     13306.8     8449.0      2454   39595006     240782.4  cudaMemcpyAsync           
+      6.8        318885997         27  11810592.5   856143.0     20075  162346756   32009142.4  cudaFreeHost              
+      6.1        283382367        230   1232097.2   740060.0    690902   75023679    4916604.5  cudaGetDeviceProperties_v2
+      2.9        136192965      17660      7711.9     5478.0       824    6786816      87297.3  cudaLaunchKernel          
+      2.8        131750709        109   1208722.1    59267.0     55075  124434948   11912233.5  cudaMemGetInfo            
+      1.9         86595450      27920      3101.6     2598.0       560     184319       3536.5  cudaEventSynchronize      
+      1.8         85816721         89    964232.8   347904.0      2369   15208984    2038617.6  cudaFree                  
+      0.9         42999298      27226      1579.3     1400.0       770     170729       1671.2  cudaEventRecord           
+      0.7         32848410         88    373277.4   293196.5      3884    2157905     500898.4  cudaMalloc                
+      0.6         26094049         78    334539.1   391808.5     40836     813604     219628.5  cudaGraphLaunch           
+      0.5         21930371          9   2436707.9  1621233.0    966269    4080931    1256826.9  cudaGraphInstantiate      
+      0.2          7401205          9    822356.1   872405.0     96348    1054871     290913.3  cudaGraphExecDestroy      
+      0.1          4220078         54     78149.6    27425.5     18717    2722763     366733.7  cudaMemcpyPeerAsync       
+      0.1          3700472         21    176213.0    42809.0     20262     533032     188810.7  cudaGraphDestroy          
+      0.1          2817494        510      5524.5     3946.0       589     133576       8295.6  cudaMemsetAsync           
+      0.0           794909        326      2438.4     1449.5       472      16975       2445.5  cudaStreamWaitEvent       
+      0.0           771154         21     36721.6    22668.0      1252     123845      38349.0  cudaGraphExecUpdate       
+      0.0           354753         21     16893.0    16444.0      5323      33678       8596.7  cudaStreamBeginCapture    
+      0.0           351869         21     16755.7     6805.0      3103      45093      16297.7  cudaStreamEndCapture      
+      0.0           260712        189      1379.4      854.0       456      13039       1754.1  cudaEventCreateWithFlags  
+      0.0           227478         27      8425.1     9061.0      1943      23665       6558.2  cudaMemcpy2DAsync         
+      0.0           164048         20      8202.4     6704.0      4752      17506       3811.2  cudaStreamCreateWithFlags 
+      0.0           160072        189       846.9      580.0       369       9191       1041.8  cudaEventDestroy          
+      0.0           154673        892       173.4      131.0        77       5360        245.3  cuGetProcAddress_v2       
+      0.0           119373         20      5968.6     5625.5      3102      11694       2593.2  cudaStreamDestroy         
+      0.0            80634         20      4031.7     5273.0      1141       7204       2306.9  cudaDeviceSynchronize     
+      0.0            34766         27      1287.6     1173.0       628       2546        591.4  cudaStreamIsCapturing     
+      0.0            20993          8      2624.1      794.5       327      15374       5176.3  cudaGetDriverEntryPoint   
+      0.0             9598          1      9598.0     9598.0      9598       9598          0.0  cuCtxSynchronize          
+      0.0             5842          4      1460.5      574.5       506       4187       1818.0  cuInit                    
+      0.0             5696          3      1898.7      282.0       145       5269       2919.6  cuModuleGetLoadingMode    
+

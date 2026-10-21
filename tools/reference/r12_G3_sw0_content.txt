@@ -1,0 +1,5 @@
+We need solve math problem in Chinese. Need provide full reasoning. Let's analyze thoroughly.
+
+Problem: A three-digit number, sum digits = 12; after swapping hundreds and units digits, new number is 198 less than original. Find original number with complete reasoning.
+
+Let original number = 100a + 10b + c, where a in 1..9, b,c in 0..9. Sum a+b+c=12. Swap hundreds and units: 100c + 10b + a. New number smaller by 198: (100a+10b+c) - (100c+10b+a) = 198 => 99(a-c)=198 => a-c=2. Then a=b? We have a=c+2, and c+2 + b + c =12 => b + 2c + 2 =12 => b=10-2c. Digits constraints: c integer 0..9, a=c+2 <=9 so c<=7, b=10-2c between 0 and9, also nonnegative. c from 

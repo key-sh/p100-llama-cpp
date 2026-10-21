@@ -1,0 +1,3 @@
+Generating SQLite file D:\temp\p16node.sqlite from D:\temp\p16node.nsys-rep
+Processing [D:\temp\p16node.sqlite] with [D:\Program Files\NVIDIA Corporation\Nsight Systems 2026.5.1\target-windows-x64\reports\cuda_gpu_trace.py] to [D:\temp\p16node_cuda_gpu_trace.csv]... PROCESSED
+

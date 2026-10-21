@@ -995,3 +995,12 @@ G1 ee213b33 / G2′ 373ec40b / G3a 47aeb7a7 / G3b 8772366b。md5 shape-effect �
 - 触发时机：决定升级上游版本时，新窗口贴 MIGRATION.md 全文+最新 HANDOFF 执行；平时不动。
 - 与 §11.8.1 B 档四边界关系：MIGRATION 是 B 档标准的批量执行程序，冲突时以 HANDOFF 纪律为准。
 <!-- ===== HANDOFF.md v8.6.3 增补段结束 ===== -->
+
+
+<!-- ===== HANDOFF.md v8.6.4 增补段（追加于 v8.6.3 之后；前文未动，只增不删）===== -->
+## 【v8.6.4】11.10 tools/ 验证资产归档（2026-10-21）
+- 自 D:\temp 易失区抢救 84 件小体量工件入库 tools/ 七子目录：fixtures/（5，探针输入原件）/reference/（50，哈希基线+golden 原件+拓扑/崩溃/KLD 证据+nsys 分析摘要+旧旗标面）/harness/（12，可复用测量脚本）/mining/（5，nsys 挖矿）/probes/（3，CUDA 微探针源码）/surgery/（6，变体手术脚本）/forensics/（3，P0 取证）。完整索引=tools/README.md。
+- 权威基线原件入库：g_hash_old_r.txt（四哈希，MIGRATION §1.3 引用件）+ R17 重锚对 + R12 全量四探针×双臂原件 + golden_G2r 首锚件。
+- 复用纪律：①脚本内部绝对路径指向 D:\temp 与当时构建树，复用先改路径；②fixtures/ 受逐字复制纪律保护；③probes/ 需 nvcc -arch=sm_60 重编译；④本段只做索引，文件与战役对应以各章记录为准。
+- 未入库大件（nsys 原始库/trace CSV/旧二进制目录/超大 build log）仍留 D:\temp 易失区——建议另行非易失备份（robocopy 全量约 695MB；清单见 tools/README.md 末节）。
+<!-- ===== HANDOFF.md v8.6.4 增补段结束 ===== -->

@@ -1,0 +1,7 @@
+
+NOTICE: Existing SQLite export found: D:\temp\p16floor.sqlite
+        It is assumed file was previously exported from: D:\temp\p16floor.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [D:\temp\p16floor.sqlite] with [D:\Program Files\NVIDIA Corporation\Nsight Systems 2026.5.1\target-windows-x64\reports\cuda_gpu_trace.py] to [D:\temp\p16floor_cuda_gpu_trace.csv]... PROCESSED
+

@@ -1,0 +1,35 @@
+'en3.8-27B-UD-Q8_K_XL.gguf' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+0.00.230.565 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.234.813 I srv    load_model: loading model 'G:\AiModels\001\002\Qwen3.8-27B-UD-Q8_K_XL.gguf'
+0.01.462.849 W model has unused tensor blk.64.attn_norm.weight (size = 20480 bytes) -- ignoring
+0.01.462.888 W model has unused tensor blk.64.post_attention_norm.weight (size = 20480 bytes) -- ignoring
+0.01.462.935 W model has unused tensor blk.64.attn_q.weight (size = 125829120 bytes) -- ignoring
+0.01.462.952 W model has unused tensor blk.64.attn_k.weight (size = 10485760 bytes) -- ignoring
+0.01.462.968 W model has unused tensor blk.64.attn_v.weight (size = 10485760 bytes) -- ignoring
+0.01.463.032 W model has unused tensor blk.64.attn_output.weight (size = 33423360 bytes) -- ignoring
+0.01.463.049 W model has unused tensor blk.64.attn_q_norm.weight (size = 1024 bytes) -- ignoring
+0.01.463.066 W model has unused tensor blk.64.attn_k_norm.weight (size = 1024 bytes) -- ignoring
+0.01.463.082 W model has unused tensor blk.64.ffn_gate.weight (size = 94699520 bytes) -- ignoring
+0.01.463.099 W model has unused tensor blk.64.ffn_down.weight (size = 94699520 bytes) -- ignoring
+0.01.463.115 W model has unused tensor blk.64.ffn_up.weight (size = 94699520 bytes) -- ignoring
+0.01.463.134 W model has unused tensor blk.64.nextn.eh_proj.weight (size = 104857600 bytes) -- ignoring
+0.01.463.152 W model has unused tensor blk.64.nextn.enorm.weight (size = 20480 bytes) -- ignoring
+0.01.463.169 W model has unused tensor blk.64.nextn.hnorm.weight (size = 20480 bytes) -- ignoring
+0.01.463.221 W model has unused tensor blk.64.nextn.shared_head_norm.weight (size = 20480 bytes) -- ignoring
+0.20.587.355 I cmn          init: llama threadpool init, n_threads = 20
+0.21.155.050 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 131072, kv_unified = 'false'
+0.21.170.082 I srv          init: chat template supports preserving reasoning, consider enabling it via --reasoning-preserve
+0.21.170.118 I srv  llama_server: model loaded
+0.21.170.120 I srv  llama_server: listening on http://127.0.0.1:8080
+0.21.170.121 W srv  llama_server: NOTICE: server default port will be changed to :9931 in a future release
+0.21.170.121 W srv  llama_server:         ref: https://github.com/ggml-org/llama.cpp/pull/26508
+0.21.868.689 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+0.22.027.892 I slot launch_slot_: id  1 | task 0 | processing task, is_child = 0
+0.26.201.408 I slot print_timing: id  1 | task 0 | n_gen =    110, tg =  36.24 t/s, tg_3s =  36.58 t/s
+0.29.208.623 I slot print_timing: id  1 | task 0 | n_gen =    220, tg =  36.41 t/s, tg_3s =  36.58 t/s
+0.30.165.887 I slot print_timing: id  1 | task 0 | prompt eval time =    1166.08 ms /    68 tokens (   17.15 ms per token,    58.32 tokens per second)
+0.30.165.898 I slot print_timing: id  1 | task 0 |        eval time =    6971.98 ms /   256 tokens (   27.34 ms per token,    36.57 tokens per second)
+0.30.165.900 I slot print_timing: id  1 | task 0 |       total time =    8138.06 ms /   324 tokens
+0.30.165.902 I slot print_timing: id  1 | task 0 |    graphs reused =        254
+0.30.165.974 I slot      release: id  1 | task 0 | stop processing: n_tokens = 323, truncated = 0

@@ -1,0 +1,16 @@
+
+NOTICE: Existing SQLite export found: D:\temp\d2_layer1.sqlite
+        It is assumed file was previously exported from: D:\temp\d2_layer1.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [D:\temp\d2_layer1.sqlite] with [D:\Program Files\NVIDIA Corporation\Nsight Systems 2026.5.1\target-windows-x64\reports\cuda_gpu_mem_time_sum.py]... 
+
+ ** CUDA GPU MemOps Summary (by Time) (cuda_gpu_mem_time_sum):
+
+ Time (%)  Total Time (ns)  Count  Avg (ns)  Med (ns)  Min (ns)  Max (ns)  StdDev (ns)            Operation           
+ --------  ---------------  -----  --------  --------  --------  --------  -----------  ------------------------------
+     98.7       4576134678  27868  164207.5   92705.0       416    495333     112353.6  [CUDA memcpy Host-to-Device]  
+      1.1         50831063    402  126445.4   10208.0       992   1021386     214813.0  [CUDA memcpy Device-to-Host]  
+      0.2          9953998    432   23041.7     928.0       832    322563      71985.3  [CUDA memset]                 
+      0.0            93473     28    3338.3    3696.0      1536      6592       1775.1  [CUDA memcpy Device-to-Device]
+
