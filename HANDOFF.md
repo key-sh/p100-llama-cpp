@@ -988,3 +988,10 @@ G1 ee213b33 / G2′ 373ec40b / G3a 47aeb7a7 / G3b 8772366b。md5 shape-effect �
 新窗口建议开局=廉价批（①+④+⑤ 一窗扫完），GDN 四件套为第二主攻。
 
 <!-- ===== HANDOFF.md v8.6.2 增补段结束 ===== -->
+
+<!-- ===== HANDOFF.md v8.6.3 增补段（追加于 v8.6.2 之后；前文未动，只增不删）===== -->
+## 【v8.6.3】11.9 迁移手册入库（2026-10-21）
+- 根目录新增 **MIGRATION.md**（v1.0）：升级 llama.cpp 官方最新版的补丁迁移操作规程。内容=资产自举盘点（log --stat 生成权威文件清单，勿凭记忆）→上游冲突面与 Pascal 兼容审查→五批迁移（批 0 文档工具/批 1 fork 独有文件/批 2 patches git am/批 3 allreduce.cu 五补丁族/批 4 分支内源码编辑，每批一 commit+key-sh 锚注）→验证八门（构建/身份链/test-backend-ops/golden 四哈希/KLD/冷机 ABBA 四档锚/#29466+P2 稳定性/功能活性）→十条预注册雷区→收官落账（verify-source 重新推导+旧基线 tag）。
+- 触发时机：决定升级上游版本时，新窗口贴 MIGRATION.md 全文+最新 HANDOFF 执行；平时不动。
+- 与 §11.8.1 B 档四边界关系：MIGRATION 是 B 档标准的批量执行程序，冲突时以 HANDOFF 纪律为准。
+<!-- ===== HANDOFF.md v8.6.3 增补段结束 ===== -->
